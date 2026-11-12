@@ -1,0 +1,1 @@
+<template><div class="not-found"><div class="eyebrow">PAGE NOT FOUND</div><h1>404</h1><h2>这条研究路径暂时不存在。</h2><p>页面可能已经移动，你可以回到工作台继续探索。</p><RouterLink class="primary-link" to="/">返回工作台 →</RouterLink></div></template>

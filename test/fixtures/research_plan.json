@@ -1,0 +1,129 @@
+{
+  "topic": "机器人视觉评测",
+  "objective": "比较机器人视觉任务的精度和能耗，形成带证据的报告。",
+  "research_questions": [
+    "视觉方法应如何同时比较精度和能耗？"
+  ],
+  "scope": {
+    "start_year": 2020,
+    "end_year": 2025,
+    "year_basis": "explicit",
+    "year_evidence": "2020–2025年",
+    "paper_limit": 3,
+    "requested_paper_count": 3,
+    "count_evidence": "3篇论文",
+    "languages": [],
+    "requested_sources": [],
+    "inclusion_criteria": [
+      "机器人视觉任务及其评价方法"
+    ],
+    "exclusion_criteria": []
+  },
+  "search_queries": [
+    "robot vision accuracy energy benchmark",
+    "机器人视觉 精度 能耗 评测"
+  ],
+  "comparison_dimensions": [
+    "精度",
+    "能耗",
+    "实验条件"
+  ],
+  "deliverables": [
+    "paper_list",
+    "paper_analysis",
+    "comparison_matrix",
+    "evidence_report"
+  ],
+  "assumptions": [],
+  "clarification_questions": [],
+  "steps": [
+    {
+      "number": 1,
+      "action": "search_papers",
+      "title": "计划步骤1",
+      "purpose": "按研究目标执行本步骤；已有有效分析可复用。",
+      "inputs": [
+        "前序材料或研究目标"
+      ],
+      "outputs": [
+        "待生成的研究材料"
+      ],
+      "depends_on": []
+    },
+    {
+      "number": 2,
+      "action": "screen_papers",
+      "title": "计划步骤2",
+      "purpose": "按研究目标执行本步骤；已有有效分析可复用。",
+      "inputs": [
+        "前序材料或研究目标"
+      ],
+      "outputs": [
+        "待生成的研究材料"
+      ],
+      "depends_on": [
+        1
+      ]
+    },
+    {
+      "number": 3,
+      "action": "acquire_fulltext",
+      "title": "计划步骤3",
+      "purpose": "按研究目标执行本步骤；已有有效分析可复用。",
+      "inputs": [
+        "前序材料或研究目标"
+      ],
+      "outputs": [
+        "待生成的研究材料"
+      ],
+      "depends_on": [
+        2
+      ]
+    },
+    {
+      "number": 4,
+      "action": "analyze_papers",
+      "title": "计划步骤4",
+      "purpose": "按研究目标执行本步骤；已有有效分析可复用。",
+      "inputs": [
+        "前序材料或研究目标"
+      ],
+      "outputs": [
+        "待生成的研究材料"
+      ],
+      "depends_on": [
+        3
+      ]
+    },
+    {
+      "number": 5,
+      "action": "compare_papers",
+      "title": "计划步骤5",
+      "purpose": "按研究目标执行本步骤；已有有效分析可复用。",
+      "inputs": [
+        "前序材料或研究目标"
+      ],
+      "outputs": [
+        "待生成的研究材料"
+      ],
+      "depends_on": [
+        4
+      ]
+    },
+    {
+      "number": 6,
+      "action": "generate_review",
+      "title": "计划步骤6",
+      "purpose": "按研究目标执行本步骤；已有有效分析可复用。",
+      "inputs": [
+        "前序材料或研究目标"
+      ],
+      "outputs": [
+        "待生成的研究材料"
+      ],
+      "depends_on": [
+        5
+      ]
+    }
+  ]
+}

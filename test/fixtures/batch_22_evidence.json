@@ -1,0 +1,235 @@
+{
+  "paper_id": 23,
+  "document_id": 4,
+  "content_sha256": "39648e45a41dcfb4d1c2abc2d08acc2c45c3b792a00a0a73ea3f2c4f46615a21",
+  "sources": {
+    "E447": {
+      "text": "depth maps look plausible and correctly ordered, yet keep\n2.7–9.3% error that is spatially structured: smooth bands\nacross the walls and floor of Classroom1 that correspond\nto tilted or warped surfaces. This is the failure mode that\na precision metric would not see (section 4). Without the\noracle scale (table 7), the monocular errors are far larger.\nFigure 4 compares the methods near the monocular\nmodels’ native input, as deployed, i.e. without oracle\nscale. libSGM at quarter resolution (6.1 ms) keeps about\n1% error with holes at occlusions and in low-texture re-\ngions; Fast-FoundationStereo at 512 × 768 is dense and\nhas 0.35–0.48% error.\nThe monocular models at their\nnative input have 11–39% error on these scenes: Depth\nAnything V2 places almost all of Sword1 at the near end\nof the depth range and MoGe-2-L at the far end, and the\nerror of Depth Anything 3 falls to 2.0–9.9% only with the\noracle scale.\n6.5\nFP16 fidelity\nWe compared every monocular TensorRT FP16 engine\nwith its FP32 PyTorch model on one scene. Depth Any-\nthing V2 at native resolution differs by 0.10–0.17%, and\nBase and Large at full resolution by 0.19% and 0.25%\n(median relative depth difference). ",
+      "page_number": 9
+    },
+    "E448": {
+      "text": "Depth Any-\nthing V2 at native resolution differs by 0.10–0.17%, and\nBase and Large at full resolution by 0.19% and 0.25%\n(median relative depth difference). Depth Anything V2-\nSmall at full resolution differs by 17.5%, and Depth Pro\nby 1.9% (with a 1.6◦shift of its field-of-view estimate).\nFor these two we report accuracy from FP32 and speed\nfrom FP16, which favours them. The FP32 Small model\nis itself inaccurate at this resolution (57.7% AbsRel), so\nthe FP16 error is not the cause of its poor result.\nFor Depth Anything 3 and MoGe-2 we found two Ten-\nsorRT 10.3 problems, both in fused kernels:\nwith ev-\nery intermediate tensor marked as an output the engines\nare correct, and ONNX Runtime reproduces PyTorch to\nwithin 0.002%. First, the attention pattern that PyTorch\nexports from scaled_dot_product_attention (queries\nand keys each scaled by the square root of the scale factor)\nproduced a wrong engine; exporting the same computa-\ntion as softmax(q s k⊤) v fixed it. ",
+      "page_number": 9
+    }
+  },
+  "cases": {
+    "wrong_id": {
+      "research_questions": [],
+      "methodologies": [
+        {
+          "statement": "研究比较单目 TensorRT FP16 引擎与对应 FP32 PyTorch 模型在单个场景上的输出差异。",
+          "evidence": [
+            {
+              "evidence_id": "E447",
+              "quote": "We compared every monocular TensorRT FP16 engine"
+            },
+            {
+              "evidence_id": "E448",
+              "quote": "with its FP32 PyTorch model on one scene."
+            }
+          ]
+        }
+      ],
+      "contributions": [
+        {
+          "statement": "作者发现，将特定注意力计算改写为另一种表达可修复 TensorRT 引擎错误。",
+          "evidence": [
+            {
+              "evidence_id": "E448",
+              "quote": "exporting the same computa-"
+            }
+          ]
+        }
+      ],
+      "experiments": [
+        {
+          "statement": "定性比较显示，libSGM 四分之一分辨率下约有 1% 误差，Fast-FoundationStereo 在 512 × 768 下误差为 0.35–0.48%。",
+          "evidence": [
+            {
+              "evidence_id": "E447",
+              "quote": "libSGM at quarter resolution (6.1 ms)"
+            },
+            {
+              "evidence_id": "E447",
+              "quote": "has 0.35–0.48% error."
+            }
+          ]
+        },
+        {
+          "statement": "在这些场景的原生输入下，单目模型误差为 11–39%；Depth Anything 3 只有使用 oracle scale 时误差才降至 2.0–9.9%。",
+          "evidence": [
+            {
+              "evidence_id": "E447",
+              "quote": "The monocular models at their"
+            },
+            {
+              "evidence_id": "E447",
+              "quote": "native input have 11–39% error on these scenes:"
+            },
+            {
+              "evidence_id": "E447",
+              "quote": "and the"
+            },
+            {
+              "evidence_id": "E447",
+              "quote": "error of Depth Anything 3 falls to 2.0–9.9% only with the"
+            },
+            {
+              "evidence_id": "E447",
+              "quote": "oracle scale."
+            }
+          ]
+        },
+        {
+          "statement": "FP16 与 FP32 的中位相对深度差异因模型而异，包括 Depth Anything V2 原生分辨率下的 0.10–0.17%，以及 Small 全分辨率下的 17.5%。",
+          "evidence": [
+            {
+              "evidence_id": "E447",
+              "quote": "Depth Any-"
+            },
+            {
+              "evidence_id": "E448",
+              "quote": "thing V2 at native resolution differs by 0.10–0.17%,"
+            },
+            {
+              "evidence_id": "E448",
+              "quote": "Depth Anything V2-"
+            },
+            {
+              "evidence_id": "E448",
+              "quote": "Small at full resolution differs by 17.5%,"
+            }
+          ]
+        }
+      ],
+      "limitations": []
+    },
+    "escaped_newlines": {
+      "research_questions": [],
+      "methodologies": [
+        {
+          "statement": "论文将单目模型的 TensorRT FP16 引擎与 FP32 PyTorch 模型进行比较，并检查 TensorRT 融合内核问题及 ONNX Runtime 与 PyTorch 的一致性。",
+          "evidence": [
+            {
+              "evidence_id": "E447",
+              "quote": "We compared every monocular TensorRT FP16 engine"
+            },
+            {
+              "evidence_id": "E448",
+              "quote": "ONNX Runtime reproduces PyTorch to"
+            }
+          ]
+        }
+      ],
+      "contributions": [],
+      "experiments": [
+        {
+          "statement": "在所述场景中，原生输入下的单目模型误差为 11–39%；Depth Anything 3 只有使用 oracle scale 时，误差才降至 2.0–9.9%。",
+          "evidence": [
+            {
+              "evidence_id": "E447",
+              "quote": "The monocular models at their\nnative input have 11–39% error on these scenes:"
+            },
+            {
+              "evidence_id": "E447",
+              "quote": "the\nerror of Depth Anything 3 falls to 2.0–9.9% only with the\noracle scale."
+            }
+          ]
+        },
+        {
+          "statement": "FP16 与 FP32 的中位相对深度差异因模型和分辨率而异；摘录报告 Depth Anything V2 原生分辨率为 0.10–0.17%，Base 和 Large 全分辨率分别为 0.19% 和 0.25%。",
+          "evidence": [
+            {
+              "evidence_id": "E448",
+              "quote": "Depth Any-\\nthing V2 at native resolution differs by 0.10–0.17%, and\\nBase and Large at full resolution by 0.19% and 0.25%"
+            }
+          ]
+        },
+        {
+          "statement": "摘录报告 Depth Anything V2-Small 全分辨率下 FP16 与 FP32 的差异为 17.5%，并指出 FP32 Small 模型在该分辨率本身就不准确。",
+          "evidence": [
+            {
+              "evidence_id": "E448",
+              "quote": "Depth Anything V2-\\nSmall at full resolution differs by 17.5%"
+            },
+            {
+              "evidence_id": "E448",
+              "quote": "The FP32 Small model\\nis itself inaccurate at this resolution"
+            }
+          ]
+        },
+        {
+          "statement": "对 Depth Anything 3 和 MoGe-2，摘录发现 TensorRT 10.3 融合内核存在问题；将注意力计算改写为 softmax(q s k⊤) v 后，问题得到修复。",
+          "evidence": [
+            {
+              "evidence_id": "E448",
+              "quote": "For Depth Anything 3 and MoGe-2 we found two Ten-\\nsorRT 10.3 problems, both in fused kernels:"
+            },
+            {
+              "evidence_id": "E448",
+              "quote": "exporting the same computa-\\ntion as softmax(q s k⊤) v fixed it."
+            }
+          ]
+        }
+      ],
+      "limitations": []
+    },
+    "changed_hyphenation": {
+      "research_questions": [],
+      "methodologies": [],
+      "contributions": [],
+      "experiments": [
+        {
+          "statement": "在所测场景中，libSGM 与 Fast-FoundationStereo 的误差较低；单目模型原生输入下误差较高。",
+          "evidence": [
+            {
+              "evidence_id": "E447",
+              "quote": "libSGM at quarter resolution (6.1 ms) keeps about\\n1% error"
+            },
+            {
+              "evidence_id": "E447",
+              "quote": "Fast-FoundationStereo at 512 × 768 is dense and\\nhas 0.35–0.48% error."
+            },
+            {
+              "evidence_id": "E447",
+              "quote": "The monocular models at their\\nnative input have 11–39% error on these scenes:"
+            }
+          ]
+        },
+        {
+          "statement": "单目 TensorRT FP16 与 FP32 的差异因模型和分辨率而异；Depth Anything V2-Small 全分辨率差异较大。",
+          "evidence": [
+            {
+              "evidence_id": "E448",
+              "quote": "Depth Anything V2 at native resolution differs by 0.10–0.17%, and Base and Large at full resolution by 0.19% and 0.25%"
+            },
+            {
+              "evidence_id": "E448",
+              "quote": "Depth Anything V2-Small at full resolution differs by 17.5%, and Depth Pro by 1.9%"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        {
+          "statement": "FP16 保真度比较仅在一个场景上进行。",
+          "evidence": [
+            {
+              "evidence_id": "E447",
+              "quote": "on one scene."
+            }
+          ]
+        },
+        {
+          "statement": "若不使用 oracle scale，片段所述单目模型误差会更大。",
+          "evidence": [
+            {
+              "evidence_id": "E447",
+              "quote": "Without the\\noracle scale (table 7), the monocular errors are far larger."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

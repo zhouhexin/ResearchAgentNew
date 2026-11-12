@@ -1,0 +1,13 @@
+import type {VenueSlug} from './research'
+export type PlanAction='search_papers'|'select_library_papers'|'screen_papers'|'acquire_fulltext'|'analyze_papers'|'compare_papers'|'generate_review'
+export const planActionNames:Record<PlanAction,string>={search_papers:'检索论文',select_library_papers:'查询已有文献',screen_papers:'筛选与去重',acquire_fulltext:'获取与解析全文',analyze_papers:'核对并补齐单篇分析',compare_papers:'比较论文',generate_review:'生成证据报告'}
+export const deliverableNames={paper_list:'文献清单',paper_analysis:'单篇分析',comparison_matrix:'比较矩阵',evidence_report:'证据报告',candidate_directions:'待验证研究方向'} as const
+export interface ResearchScope {venue_slug?:VenueSlug|null;venue_slugs?:(VenueSlug)[];verified_main_only?:boolean;start_year:number|null;end_year:number|null;year_basis:'explicit'|'assumed'|'unspecified'|'edited';year_evidence:string;paper_limit:number;requested_paper_count:number|null;count_evidence:string;languages:string[];requested_sources:string[];inclusion_criteria:string[];exclusion_criteria:string[]}
+export interface ResearchStep {number:number;action:PlanAction;title:string;purpose:string;inputs:string[];outputs:string[];depends_on:number[]}
+export interface ResearchPlan {topic:string;objective:string;research_questions:string[];scope:ResearchScope;search_queries:string[];comparison_dimensions:string[];deliverables:(keyof typeof deliverableNames)[];assumptions:string[];clarification_questions:string[];steps:ResearchStep[]}
+export interface ResearchPlanRecord {id:string;goal:string;plan:ResearchPlan;revision:number;status:'draft';created_at:string;updated_at:string;planning_date:string;model_name:string;source_task_id:string;edited_by_user?:boolean;capabilities:{venues?:Record<string,string>;venue_platforms?:Record<string,string[]>;search_sources:string[];actions:Record<string,string>;paper_limit:{min:number;max:number};execution_available:false;executable_actions?:PlanAction[];notice:string}}
+
+export const planVenues=(scope:ResearchScope)=>scope.venue_slugs?.length?scope.venue_slugs:scope.venue_slug?[scope.venue_slug]:[]
+
+export const venueNames:Record<VenueSlug,string>={cvpr:'CVPR',iccv:'ICCV',aaai:'AAAI',ijcai:'IJCAI',acl:'ACL',emnlp:'EMNLP',sigir:'SIGIR',neurips:'NeurIPS','artificial-intelligence':'Artificial Intelligence',tois:'TOIS',eccv:'ECCV',icml:'ICML',iclr:'ICLR'}
+export const venuePlatforms:Record<VenueSlug,string[]>={cvpr:['cvf'],iccv:['cvf'],aaai:['aaai_proceedings'],ijcai:['ijcai_proceedings'],acl:['acl_anthology'],emnlp:['acl_anthology'],sigir:['acm','crossref'],neurips:['neurips_proceedings','openreview'],'artificial-intelligence':['elsevier','crossref'],tois:['acm','crossref'],eccv:['ecva','springer','crossref','openreview'],icml:['pmlr','openreview'],iclr:['openreview','iclr_proceedings']}

@@ -1,0 +1,23 @@
+# 数据访问与配置
+requests>=2.31,<3
+python-dotenv>=1,<2
+sqlalchemy>=2,<3
+psycopg[binary]>=3.2,<4
+
+# 文档解析
+PyMuPDF>=1.24,<2
+
+# Agent 与结构化分析
+langgraph>=1.0,<2
+langchain-openai>=1.0,<2
+langchain-core>=1.0,<2
+openai>=2,<4
+pydantic>=2,<3
+
+# 验证
+pytest>=8,<10
+
+#
+fastapi
+uvicorn
+python-multipart>=0.0.20,<1

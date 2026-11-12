@@ -1,0 +1,2 @@
+import {ref,shallowRef} from 'vue'
+export function useResource<T>(initial:T){const data=shallowRef<T>(initial),loading=ref(false),error=ref('');let version=0;async function load(fn:()=>Promise<T>){const v=++version;loading.value=true;error.value='';try{const value=await fn();if(v===version)data.value=value}catch(e){if(v===version)error.value=(e as Error).message}finally{if(v===version)loading.value=false}}return{data,loading,error,load}}

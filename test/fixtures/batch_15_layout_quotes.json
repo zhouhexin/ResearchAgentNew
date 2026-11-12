@@ -1,0 +1,32 @@
+{
+  "paper_id": 28,
+  "document_id": 9,
+  "content_sha256": "1f821a30bf7c2b556005fc8aa7c66df3a9e348c531a382cd4b5165088a21739f",
+  "source_text": "Only the top-W1 paths are re-\ntained as seeds for further expansion. This method\nenables efficient construction of high-quality candi-\ndate paths while maintaining interpretability. The\npseudo-code for structured retrieval is detailed in\nAlgorithm 1 of Appendix A.1.\nUnstructured retrieval.\nFor each document\nDoc(e) associated with e ∈Topic(q), we retrieve\ntext blocks, split them into smaller passages, and se-\nlect the top-Wmax sentences using a dense retrieval\nmodel (DRM). Instead of embedding the full query,\nHydraRAG uses the skyline indicator to empha-\nsize structural relevance. Unlike ToG-2.0, which\ntargets only one-hop relations, ours captures more\ncomplex reasoning, i.e., transitive multi-hop rela-\ntions. The resulting sentences are used to prompt\nthe LLM to construct new knowledge paths, which\nare summarized and added to PathsI.\nWeb document retrieval. When offline documents\nand KGs are insufficient, HydraRAG performs on-\nline retrieval by issuing the question q to a search\nengine and prompting the LLM to select the top-\nWmax web results. These documents are then pro-\ncessed using the same DRM-based screening and\npath construction as in the offline setting. ",
+  "candidate_analysis": {
+    "research_questions": [],
+    "methodologies": [
+      {
+        "statement": "非结构化检索使用密集检索模型筛选主题实体相关文档中的文本块与句子，并利用筛选结果构建新的知识路径。",
+        "evidence": [
+          {
+            "evidence_id": "E708",
+            "quote": "For each document\nDoc(e) associated with e ∈Topic(q), we retrieve\ntext blocks, split them into smaller passages, and se-lect the top-Wmax sentences using a dense retrieval\nmodel (DRM)."
+          }
+        ]
+      },
+      {
+        "statement": "当离线文档和知识图谱不足时，HydraRAG 在线检索网页文档，并采用与离线设置相同的筛选和路径构建流程。",
+        "evidence": [
+          {
+            "evidence_id": "E708",
+            "quote": "These documents are then\\nprocessed using the same DRM-based screening and\\npath construction as in the offline setting."
+          }
+        ]
+      }
+    ],
+    "contributions": [],
+    "experiments": [],
+    "limitations": []
+  }
+}

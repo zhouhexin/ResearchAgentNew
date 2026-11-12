@@ -1,0 +1,16 @@
+<script setup lang="ts">
+import {ref,onMounted} from 'vue'
+import {api,mode} from '../api'
+import type {Health} from '../types/research'
+import {useResource} from '../composables/useResource'
+import AsyncState from '../components/AsyncState.vue'
+import ModelCheckPanel from '../components/ModelCheckPanel.vue'
+const apiBase=import.meta.env.VITE_API_BASE_URL||'/api/v1'
+const selected=ref(mode()),pageSize=ref(Number(localStorage.getItem('rp-page-size'))||20),theme=ref(localStorage.getItem('rp-theme')||'light')
+const {data,loading,error,load}=useResource<Health|null>(null)
+function refresh(){load(()=>api.health())}
+function apply(){localStorage.setItem('rp-data-mode',selected.value);location.reload()}
+function savePrefs(){localStorage.setItem('rp-page-size',String(pageSize.value));localStorage.setItem('rp-theme',theme.value);document.documentElement.dataset.theme=theme.value}
+onMounted(refresh)
+</script>
+<template><div class="page-heading"><div><div class="eyebrow">MAKE SPACE FOR YOUR RESEARCH</div><h1>设置</h1><p>连接研究工具，调整工作区偏好。</p></div></div><div class="settings-layout"><section class="panel settings-panel"><h2>数据连接</h2><p class="muted">选择当前工作区的数据来源。</p><div class="settings-row"><div><strong>运行模式</strong><p>演示模式使用本地快照；API 模式连接真实服务。</p></div><el-select v-model="selected" aria-label="运行模式"><el-option label="本地演示" value="demo"/><el-option label="真实 API" value="api"/></el-select></div><div class="settings-row"><div><strong>API 地址</strong><p>开发环境由 Vite 代理到本地后端。</p></div><code>{{apiBase}}</code></div><el-button type="primary" :disabled="selected===mode()" @click="apply">应用模式并刷新</el-button></section><section class="panel settings-panel"><div class="flex-between"><h2>服务状态</h2><el-button text @click="refresh">重新检测 ↻</el-button></div><AsyncState :loading="loading" :error="error" @retry="refresh"><div v-for="s in [{label:'HTTP API',ok:data?.api},{label:'PostgreSQL 数据库',ok:data?.database},{label:'语言模型配置',ok:data?.model_configured}]" :key="s.label" class="settings-row"><span>{{s.label}}</span><span class="status-chip" :class="s.ok?'success':'neutral'"><i/>{{s.ok?'可用':'未连接 / 未配置'}}</span></div><div class="settings-row"><span>当前模型</span><span class="muted">{{data?.model_name||'服务端未提供'}}</span></div><div class="settings-row"><span>当前连接方式</span><span class="muted">{{data?.model_http_backend||'服务端未提供'}}</span></div><p v-if="data?.model_configuration_error" class="error-text">{{data.model_configuration_error}}</p></AsyncState><p class="note">模型配置就绪不等于请求一定成功。API Key 和数据库密码仅保存在服务端。</p></section><ModelCheckPanel :health="data||undefined"/><section class="panel settings-panel"><h2>界面偏好</h2><div class="settings-row"><div><strong>每页显示</strong><p>保存后用于新打开的列表页面。</p></div><el-select v-model="pageSize" aria-label="默认分页大小" @change="savePrefs"><el-option v-for="n in [10,20,50]" :key="n" :label="`${n} 条`" :value="n"/></el-select></div><div class="settings-row"><div><strong>显示风格</strong><p>选择适合阅读的页面对比度。</p></div><el-select v-model="theme" aria-label="显示风格" @change="savePrefs"><el-option label="清晰浅色" value="light"/><el-option label="柔和纸色" value="paper"/></el-select></div></section><section class="settings-note"><h3>关于 ResearchPilot</h3><p>面向个人研究者的文献工作台。将检索、阅读、分析与综述连接起来，让每一个研究判断都能回到原文。</p><span class="eyebrow">LOCAL WORKSPACE · V0.1</span></section></div></template>

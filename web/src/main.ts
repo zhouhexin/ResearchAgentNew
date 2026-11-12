@@ -1,0 +1,10 @@
+import {createApp} from 'vue'
+import {createPinia} from 'pinia'
+import ElementPlus from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import 'element-plus/dist/index.css'
+import './styles/main.css'
+import {router} from './router'
+import App from './App.vue'
+document.documentElement.dataset.theme=localStorage.getItem('rp-theme')||'light'
+createApp(App).use(createPinia()).use(router).use(ElementPlus,{locale:zhCn}).mount('#app')
