@@ -20,6 +20,9 @@
 | 页面上的按钮，对应哪个 Python 程序？ | [前后端功能对照](docs/FEATURE_MAP.md) |
 | 怎样才能让页面真正操作数据库、分析论文？ | [下一步开发计划](docs/INTEGRATION_PLAN.md) |
 | 怎样检查程序有没有问题？ | [测试说明](docs/TESTING.md) |
+| 下一阶段怎样评估科研结论质量、建立标注集和语义评审？ | [研究质量评测与辅助语义评审方案](docs/RESEARCH_QUALITY_PLAN.md) |
+| 怎样运行首批 8 条语义证据评审并对照人工标签？ | [辅助语义评审使用说明](docs/CLAIM_REVIEW_GUIDE.md) |
+| 怎样在论文分析页面发起辅助评审、查看依据并继续失败项？ | [网页辅助评审与验收步骤](docs/CLAIM_REVIEW_GUIDE.md#7-网页辅助评审) |
 | 怎样打开浏览器页面？ | [前端使用说明](web/README.md) |
 | 以后连接页面和 Python 时，需要传哪些数据？ | [接口说明](web/API_CONTRACT.md) |
 

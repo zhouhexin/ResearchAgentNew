@@ -13,7 +13,8 @@
     "test:data": "node scripts/data-check.mjs",
     "test:questions": "node scripts/question-picker-check.mjs",
     "test:planning": "node scripts/planning-check.mjs",
-    "test:citations": "node scripts/citation-check.mjs"
+    "test:citations": "node scripts/citation-check.mjs",
+    "test:claim-review": "node scripts/claim-review-check.mjs"
   },
   "dependencies": {
     "vue": "3.5.32",

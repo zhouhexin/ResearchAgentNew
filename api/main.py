@@ -28,6 +28,7 @@ from api.research_execution import router as research_execution_router
 from api.plan_reports import router as plan_reports_router
 from api.venues import router as venues_router
 from api.abstract_translations import router as abstract_translations_router
+from api.claim_reviews import router as claim_reviews_router
 from api.analyses import model_settings
 from agent.llm_runtime import model_http_backend, model_name
 
@@ -56,6 +57,7 @@ app.include_router(plan_reports_router)
 app.include_router(venues_router)
 app.include_router(abstract_translations_router)
 app.include_router(analyses_router)
+app.include_router(claim_reviews_router)
 app.include_router(reviews_router)
 
 @app.get("/api/v1/ping")

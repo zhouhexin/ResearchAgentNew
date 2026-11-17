@@ -5,10 +5,14 @@ import {cleanParams} from './utils'
 import type {ResearchPlan,ResearchPlanRecord} from '../types/planning'
 import type {ResearchSearchResponse} from '../types/research-search'
 import type {AbstractTranslationResponse} from '../types/translation'
+import type {ClaimReviewRecord} from '../types/claim-review'
 import type {AnalysisResult,DocumentSummary,EvidenceRecord,Health,PageResult,PaperSummary,ReviewResult,ReviewComparison,SearchPaper,VenueSummary,TaskInfo,HttpBackend,ModelCheckMode} from '../types/research'
 export const mode=()=>localStorage.getItem('rp-data-mode')||import.meta.env.VITE_DATA_MODE||'demo'
 async function request<T>(method:string,path:string,data?:unknown,params?:Record<string,unknown>):Promise<T>{const cleanedParams=cleanParams(params);if(mode()==='demo')return demoRequest<T>(method,path,data,cleanedParams);return(await http.request<T>({method,url:path,data,params:cleanedParams,...(data instanceof FormData?{timeout:120000}:path.startsWith('/venues/')?{timeout:240000}:path==='/agent/chat'?{timeout:600000}:{})})).data}
 export const api={
+ claimReviews:(id:string)=>request<{items:ClaimReviewRecord[]}>('GET',`/analyses/${encodeURIComponent(id)}/claim-reviews`),
+ claimReview:(id:string)=>request<ClaimReviewRecord>('GET',`/claim-reviews/${encodeURIComponent(id)}`),
+ startClaimReview:(id:string)=>request<{task_id:string;review_id:string;reused:boolean}>('POST',`/analyses/${encodeURIComponent(id)}/claim-reviews`),
  lookupAbstractTranslation:(title:string,abstract:string)=>request<AbstractTranslationResponse|null>('POST','/translations/abstract/lookup',{title,abstract}),
  startAbstractTranslation:(title:string,abstract:string)=>request<{task_id:string;translation_id:string;reused:boolean}>('POST','/translations/abstract',{title,abstract}),
  abstractTranslation:(id:string)=>request<AbstractTranslationResponse>('GET',`/translations/abstract/${encodeURIComponent(id)}`),

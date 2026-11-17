@@ -101,36 +101,40 @@ def _quote_variants(quote: str):
     return (quote,) if decoded == quote else (quote, decoded)
 
 
-def suggest_original_quote(quote: str, text: str) -> str | None:
-    """只给重试模型提供原文候选，不用于自动通过引用核验。
-
-    对照 PDF 行尾断词和最多两层转义定位，建议值必须是唯一连续原文。
-    数字、普通连字符、大小写、文字变化仍不匹配；不跨证据片段搜索。
-    """
-    if not quote.strip() or not text:return None
+def layout_quote_forms(text: str):
+    """仅为候选定位提供断词对照及源字符映射，不用于自动通过引用核验。"""
     canonical, offsets = _canonical_text(text)
-    # 仅忽略英文字母间的行尾断词；保留到源文本的逐字符映射。
     omitted=set()
     line_spaces=set()
     for match in re.finditer(r'(?<=[A-Za-z])-\r?\n[ \t]*(?=[a-z])', text):
         omitted.update(range(match.start(),match.end()))
         line_spaces.update(range(match.start()+1,match.end()))
-    sources=[]
-    for removed in (omitted,line_spaces):
-        sources.append((''.join(char for char,pos in zip(canonical,offsets) if pos not in removed),
-                        [pos for pos in offsets if pos not in removed]))
+    return [(rule, ''.join(char for char,pos in zip(canonical,offsets) if pos not in removed),
+             [pos for pos in offsets if pos not in removed])
+            for rule, removed in [('unchanged',set()), ('join_line_end_word',omitted),
+                                  ('retain_line_end_hyphen',line_spaces)]]
+
+
+def suggest_original_quote(quote: str, text: str) -> str | None:
+    """只给重试模型提供唯一连续原文候选，不自动通过引用核验。
+
+    原文和模型引句分别对照行尾断词，允许断词位置不同或保留部分原排版。
+    数字、普通连字符、大小写、文字变化仍不匹配；不跨证据片段搜索。
+    """
+    if not quote.strip() or not text:return None
+    sources=layout_quote_forms(text)
     variants={quote}
     for _ in range(2):variants.update(v for q in tuple(variants) for v in _quote_variants(q))
     matches=set()
     for variant in variants:
-        needle,_=_canonical_text(variant)
-        if len(needle)<24:continue
-        for compact,positions in sources:
-            start=compact.find(needle)
-            while start>=0:
-                matches.add(text[positions[start]:positions[start+len(needle)-1]+1])
-                if len(matches)>1:return None
-                start=compact.find(needle,start+1)
+        for _,needle,_ in layout_quote_forms(variant):
+            if len(needle)<24:continue
+            for _,compact,positions in sources:
+                start=compact.find(needle)
+                while start>=0:
+                    matches.add(text[positions[start]:positions[start+len(needle)-1]+1])
+                    if len(matches)>1:return None
+                    start=compact.find(needle,start+1)
     return next(iter(matches)) if matches else None
 
 

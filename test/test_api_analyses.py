@@ -25,6 +25,8 @@ def client(database_client, monkeypatch, tmp_path):
     monkeypatch.setenv('LLM_READ_TIMEOUT', '400')
     monkeypatch.setenv('LLM_MAX_RETRIES', '0')
     monkeypatch.setenv('ANALYSIS_MAX_CHARS', '9000')
+    # CLI 测试可能加载本机 .env；固定额外重试次数，避免测试顺序影响调用次数。
+    monkeypatch.setenv('ANALYSIS_BATCH_RETRIES', '1')
     monkeypatch.setenv('STRUCTURED_OUTPUT_METHOD', 'json_schema')
     database_client.app.include_router(analyses.router)
     database_client.app.include_router(tasks.router)
