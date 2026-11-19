@@ -19,6 +19,8 @@ import storage.db_models
 def isolated_model_provider(monkeypatch):
     # 不因开发者切换 .env 而让受控模型测试转向真实 Codex 登录。
     monkeypatch.setenv('LLM_PROVIDER', 'openai')
+    monkeypatch.setenv('RESEARCH_RUNTIME_PINNING', 'false')
+    monkeypatch.setenv('ANALYSIS_RUNTIME_PINNING', 'false')
 
 
 @pytest.fixture

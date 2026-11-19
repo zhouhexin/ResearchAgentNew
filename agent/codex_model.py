@@ -150,8 +150,11 @@ def file_tail(file, size=65536):
 
 
 class CodexModel:
-    def __init__(self, *, timeout, trust_env=True, model=None, schema=None, include_raw=False):
-        self.executable = codex_executable()
+    def __init__(self, *, timeout, trust_env=True, model=None, schema=None, include_raw=False,
+                 executable=None, system_proxy=None, runtime_validator=None):
+        self.executable = executable or codex_executable()
+        self.system_proxy = use_system_proxy(trust_env) if system_proxy is None else system_proxy
+        self.runtime_validator = runtime_validator
         self.timeout, self.trust_env, self.model = timeout, trust_env, model
         self.schema, self.include_raw = schema, include_raw
 
@@ -160,7 +163,8 @@ class CodexModel:
         if method not in {'json_schema', 'function_calling'}:
             raise ValueError('不支持的结构化输出模式')
         return CodexModel(timeout=self.timeout, trust_env=self.trust_env, model=self.model,
-                          schema=schema, include_raw=include_raw)
+                          schema=schema, include_raw=include_raw, executable=self.executable,
+                          system_proxy=self.system_proxy, runtime_validator=self.runtime_validator)
 
     def invoke(self, messages):
         messages = convert_to_messages([('human', messages)] if isinstance(messages, str) else messages)
@@ -184,6 +188,8 @@ class CodexModel:
         return parsed
 
     def _execute(self, prompt):
+        if self.runtime_validator:
+            self.runtime_validator()
         started = monotonic()
         env = child_environment(self.trust_env)
         with tempfile.TemporaryDirectory(prefix='researchpilot-codex-') as directory:
@@ -203,7 +209,7 @@ class CodexModel:
                     '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false',
                     '-c', 'features.multi_agent=false', '-c', 'features.view_image=false',
                     '-c', 'web_search="disabled"', '-o', str(output)]
-            args.extend(['-c', f'features.respect_system_proxy={str(use_system_proxy(self.trust_env)).lower()}'])
+            args.extend(['-c', f'features.respect_system_proxy={str(self.system_proxy).lower()}'])
             if self.model:
                 args.extend(['--model', self.model])
             if self.schema is not None:

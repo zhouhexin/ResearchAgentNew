@@ -23,6 +23,10 @@ class FulltextError(ValueError):
 
 
 def pdf_download_settings():
+    from tools.execution_config import CURRENT
+    fixed = CURRENT.get()
+    if fixed:
+        return dict(fixed['pdf_download'])
     result = {}
     for name, key, default, maximum in (
         ('PDF_DOWNLOAD_TIMEOUT', 'total_timeout', 600, 3600),
@@ -46,8 +50,9 @@ def find_open_pdf_urls(doi=None, openalex_id=None):
         raise FulltextError('PAPER_ID_REQUIRED', '该论文缺少 DOI 或 OpenAlex ID，暂时无法自动确认全文来源，请手动上传。')
     identifier = expected_id.rsplit('/', 1)[-1] if expected_id else 'https://doi.org/' + expected_doi
     params = {'select': 'id,doi,best_oa_location,locations,open_access'}
-    if os.getenv('OPENALEX_API_KEY'):
-        params['api_key'] = os.environ['OPENALEX_API_KEY']
+    from tools.execution_config import openalex_key
+    if key := openalex_key():
+        params['api_key'] = key
     with requests.get('https://api.openalex.org/works/' + quote(identifier, safe=':/'),
                       params=params, timeout=(10, 30)) as response:
         if response.status_code == 404:

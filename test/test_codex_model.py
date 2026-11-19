@@ -15,6 +15,59 @@ from agent.model_check import check_structured_analysis
 from agent.batch_analysis import retryable
 
 
+def test_snapshot_pins_cli_model_binary_and_proxy_through_structured_clone(cli, monkeypatch, tmp_path):
+    from agent.runtime_snapshot import capture_runtime, RuntimeUnavailable
+    monkeypatch.setattr('agent.runtime_snapshot.IDENTITY_KEY', tmp_path / 'identity.key')
+    monkeypatch.setenv('CODEX_MODEL', 'pinned-model')
+    monkeypatch.setenv('CODEX_USE_SYSTEM_PROXY', 'false')
+    snapshot = capture_runtime(read_timeout=10)
+    monkeypatch.setenv('CODEX_MODEL', 'new-default-model')
+    monkeypatch.setenv('CODEX_CLI_PATH', '/unavailable/new-codex')
+    monkeypatch.setenv('CODEX_USE_SYSTEM_PROXY', 'true')
+    monkeypatch.setenv('LLM_PROVIDER', 'openai')
+    with analysis_llm(runtime_snapshot=snapshot) as model:
+        assert check_structured_analysis(model, 'json_schema') == {'findings': 1, 'quotes': 1}
+        record = json.loads(cli.read_text())
+        assert record['args'][record['args'].index('--model') + 1] == 'pinned-model'
+        assert 'features.respect_system_proxy=false' in record['args']
+        # 同一客户端的下一次调用也必须检查原网络配置。
+        monkeypatch.setenv('HTTPS_PROXY', 'http://new-proxy.example:8080')
+        with pytest.raises(RuntimeUnavailable):
+            model.invoke('OK')
+
+
+def test_codex_snapshot_requires_explicit_model_and_original_binary(cli, monkeypatch, tmp_path):
+    from agent.runtime_snapshot import capture_runtime, RuntimeUnavailable
+    monkeypatch.setattr('agent.runtime_snapshot.IDENTITY_KEY', tmp_path / 'identity.key')
+    with pytest.raises(ValueError, match='CODEX_MODEL'):
+        capture_runtime(read_timeout=10)
+    monkeypatch.setenv('CODEX_MODEL', 'pinned-model')
+    snapshot = capture_runtime(read_timeout=10)
+    Path(snapshot.codex_executable).write_text('changed executable')
+    with pytest.raises(RuntimeUnavailable, match='执行文件'):
+        with analysis_llm(runtime_snapshot=snapshot):
+            pytest.fail('不得创建更换了执行文件的客户端')
+
+
+@pytest.mark.parametrize('change', ['version', 'path', 'login_home'])
+def test_codex_snapshot_refuses_changed_tool_or_login_environment(cli, monkeypatch, tmp_path, change):
+    from agent.runtime_snapshot import capture_runtime, RuntimeUnavailable
+    monkeypatch.setattr('agent.runtime_snapshot.IDENTITY_KEY', tmp_path / 'identity.key')
+    monkeypatch.setenv('CODEX_MODEL', 'pinned-model')
+    snapshot = capture_runtime(read_timeout=10)
+    assert snapshot.codex_cli_version == 'fake-codex 1.0'
+    if change == 'version':
+        monkeypatch.setenv('FAKE_CODEX_VERSION', 'fake-codex 2.0')
+    elif change == 'path':
+        monkeypatch.setenv('PATH', str(tmp_path))
+    else:
+        monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'other-login'))
+    with pytest.raises(RuntimeUnavailable):
+        with analysis_llm(runtime_snapshot=snapshot):
+            pytest.fail('不得恢复已改变的 CLI 环境')
+    assert not cli.exists()
+
+
 @pytest.fixture
 def cli(monkeypatch, tmp_path):
     binary = tmp_path / 'fake-codex'
@@ -23,6 +76,9 @@ def cli(monkeypatch, tmp_path):
 import json, os, pathlib, sys, time
 args = sys.argv[1:]
 mode = os.getenv('FAKE_CODEX_MODE', 'valid')
+if args == ['--version']:
+    print(os.getenv('FAKE_CODEX_VERSION', 'fake-codex 1.0'))
+    sys.exit(0)
 if args == ['login', 'status']:
     print('Logged in using API key' if mode == 'api_login' else 'Logged in using ChatGPT')
     sys.exit(0)

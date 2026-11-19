@@ -7,6 +7,7 @@ import {deliverableNames,planActionNames,planVenues,venueNames,venuePlatforms} f
 import type {ResearchPlan,ResearchPlanRecord} from '../types/planning'
 import TaskProgress from './TaskProgress.vue'
 import ResearchSearchWorkspace from './ResearchSearchWorkspace.vue'
+import LibraryExecutionWorkspace from './LibraryExecutionWorkspace.vue'
 
 const props=defineProps<{initialPlanId?:string;initialTaskId?:string;initialSearchRunId?:string}>()
 const emit=defineEmits<{(e:'opened',id:string):void}>()
@@ -133,7 +134,7 @@ onBeforeUnmount(()=>{version++})
   <p class="muted">描述研究主题、关注的问题，以及时间、场景或论文数量要求。没有确定的条件可以留给系统提出建议。</p>
   <label for="research-goal">研究目标</label>
   <el-input id="research-goal" v-model="goal" type="textarea" :rows="5" :maxlength="6000" show-word-limit :disabled="locked" placeholder="例如：梳理近五年机器人视觉评测研究，比较任务精度、运行速度和能耗，分析3篇论文并形成带原文证据的报告。" aria-label="研究目标"/>
-  <div class="goal-actions"><el-button type="primary" :loading="creating||active" :disabled="locked||goal.trim().length<2||mode()==='demo'" @click="generate">理解目标并制定计划</el-button><span class="note">先确认并保存计划，再启动下方的文献检索与初筛。</span></div>
+  <div class="goal-actions"><el-button type="primary" :loading="creating||active" :disabled="locked||goal.trim().length<2||mode()==='demo'" @click="generate">理解目标并制定计划</el-button><span class="note">先确认并保存计划，再按计划从文献库选文或执行检索初筛。</span></div>
   <p v-if="mode()==='demo'" class="note">演示模式不调用模型或伪造研究计划，请在设置中切换到真实 API 模式。</p>
  </section>
  <p v-if="error" role="alert" class="error-text">{{error}}</p>
@@ -172,7 +173,8 @@ onBeforeUnmount(()=>{version++})
   </article>
   <div class="goal-actions"><el-button type="primary" :loading="saving" :disabled="locked||!dirty||goalChanged" @click="save">保存计划修改</el-button><span class="note">检索来源：{{record.capabilities.search_sources.join('、')}}。下方可执行检索与摘要初筛，确认选文后继续全文与分析。</span></div>
  </section>
- <ResearchSearchWorkspace v-if="record" :record="record" :disabled="locked||dirty||goalChanged" :initial-run-id="initialSearchRunId"/>
+ <LibraryExecutionWorkspace v-if="record&&record.plan.steps.some(s=>s.action==='select_library_papers')" :record="record" :disabled="locked||dirty||goalChanged"/>
+ <ResearchSearchWorkspace v-else-if="record" :record="record" :disabled="locked||dirty||goalChanged" :initial-run-id="initialSearchRunId"/>
 </template>
 
 <style scoped>

@@ -10,7 +10,7 @@ from storage.repository import normalize_doi
 OPEN_SEARCH = '{http://a9.com/-/spec/opensearch/1.1/}'
 
 
-def search_arxiv_page(query, page=1, page_size=20, start_year=None, end_year=None, sort='relevance'):
+def search_arxiv_page(query, page=1, page_size=20, start_year=None, end_year=None, sort='relevance', *, deadline=None):
     if not query.strip():
         raise ValueError('检索关键词不能为空')
     if page < 1 or not 1 <= page_size <= 100 or page * page_size > 30000:
@@ -32,7 +32,8 @@ def search_arxiv_page(query, page=1, page_size=20, start_year=None, end_year=Non
     if start_year or end_year:
         expression = f'({expression}) AND submittedDate:[{start_year or 1991}01010000 TO {end_year or 2100}12312359]'
     payload = query_arxiv({'search_query': expression, 'start': (page - 1) * page_size,
-                           'max_results': page_size, 'sortBy': sort_fields[sort], 'sortOrder': 'descending'})
+                           'max_results': page_size, 'sortBy': sort_fields[sort], 'sortOrder': 'descending'},
+                          **({'deadline': deadline} if deadline is not None else {}))
     try:
         root = ET.fromstring(payload)
     except ET.ParseError:

@@ -143,6 +143,9 @@ def load_annotations(path, manifest, items):
 def error_info(exc):
     """保存错误类型和安全状态，不保存驱动/HTTP 异常原文。"""
     result = {'error_type': type(exc).__name__}
+    from agent.runtime_snapshot import RuntimeUnavailable
+    if isinstance(exc, RuntimeUnavailable):
+        return dict(result, code=exc.code, message=str(exc)), True
     if isinstance(exc, CodexExecutionError):
         result.update(code=exc.code, message=str(exc), diagnostic=exc.diagnostic)
         return result, True

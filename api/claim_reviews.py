@@ -9,7 +9,7 @@ import sqlite3
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -22,6 +22,8 @@ from agent.paper_context import verify_paper_context, DocumentChangedError
 from api.analyses import model_settings, safe_source
 from api.analysis_results import load_result
 from api.tasks import connection, now, get_task
+from api import runtime_bindings, provenance
+from agent.runtime_snapshot import RuntimeUnavailable
 from evaluation.claim_quality import (fingerprint, run_reviews, review_run_key, error_info, checked_cache,
                                       atomic_json, request_matches)
 from storage.database import make_db
@@ -104,20 +106,21 @@ def build_items(snapshot):
     return items
 
 
-def configuration(snapshot, settings):
-    tokens = int(os.getenv('CLAIM_REVIEW_MAX_OUTPUT_TOKENS', '2000'))
-    max_chars = int(os.getenv('CLAIM_REVIEW_MAX_INPUT_CHARS', '24000'))
+def configuration(snapshot, settings, binding=None):
+    tokens = binding.settings['output_tokens'] if binding else int(os.getenv('CLAIM_REVIEW_MAX_OUTPUT_TOKENS', '2000'))
+    max_chars = binding.settings['max_input_chars'] if binding else int(os.getenv('CLAIM_REVIEW_MAX_INPUT_CHARS', '24000'))
     if tokens < 1 or max_chars < 1:
         raise ValueError('辅助评审输入和输出预算必须为正整数。')
-    endpoint = model_endpoint()
+    endpoint = binding.runtime.endpoint if binding else model_endpoint()
     parsed = urlsplit(endpoint)
     return {'policy_version': POLICY_VERSION, 'quote_protocol': QUOTE_PROTOCOL,
         'analysis_id': snapshot['id'], 'snapshot_sha256': fingerprint(snapshot),
-        'context_policy': CONTEXT_POLICY, 'provider': model_http_backend(), 'model_name': model_name(),
+        'context_policy': CONTEXT_POLICY, 'provider': binding.runtime.backend if binding else model_http_backend(), 'model_name': binding.runtime.model if binding else model_name(),
         'endpoint': parsed.scheme + '://' + (parsed.hostname or ''), 'endpoint_sha256': fingerprint(endpoint),
         'timeout': settings['timeout'], 'sdk_retries': settings['retries'], 'structured_method': settings['method'],
         'max_output_tokens': tokens, 'max_input_chars': max_chars, 'trust_env': True,
-        'runtime_options_sha256': fingerprint({key: os.getenv(key, '') for key in
+        **({'agent_version_id': binding.version.id, 'runtime_snapshot_id': binding.runtime.id} if binding else {}),
+        'runtime_options_sha256': binding.runtime.id if binding else fingerprint({key: os.getenv(key, '') for key in
             ('LLM_ENABLE_THINKING', 'LLM_MAX_OUTPUT_TOKENS', 'CODEX_USE_SYSTEM_PROXY')})}
 
 
@@ -220,21 +223,36 @@ def owned_update(record, task_id, **changes):
         task = json.loads(row[0]) if row else None
         if not active or active['task_id'] != task_id or not task or task['status'] not in {'queued', 'running'}:
             raise RuntimeError('评审任务已结束或被替代')
+        if record.get('interaction_id'):
+            if changes.get('status') == 'running' and not task.get('started_at'):
+                changes['started_at'] = now()
+            if changes.get('status') in {'succeeded', 'failed'}:
+                changes['finished_at'] = now()
+                changes['failure_stage'] = task.get('stage') if changes['status'] == 'failed' else None
         task.update(changes, updated_at=now())
         db.execute('UPDATE tasks SET payload=? WHERE id=?', (json.dumps(task, ensure_ascii=False), task_id))
 
 
 def run_job(record, task_id):
+    from api.tasks import task_scope
+    with task_scope(task_id):
+        _run_job(record, task_id)
+
+
+def _run_job(record, task_id):
     try:
         owned_update(record, task_id, status='running', stage='核对固定分析版本与原文', progress=0)
         verify_snapshot(record['snapshot'])
         config = record['config']
+        binding = runtime_bindings.for_task(task_id, 'claim_review')
         @contextmanager
         def factory():
-            with analysis_llm(read_timeout=config['timeout'], retries=config['sdk_retries'], trust_env=True,
-                              max_output_tokens=config['max_output_tokens']) as llm:
+            with (binding.llm() if binding else analysis_llm(read_timeout=config['timeout'], retries=config['sdk_retries'], trust_env=True,
+                              max_output_tokens=config['max_output_tokens'])) as llm:
                 yield llm
         def check(item):
+            if binding:
+                binding.check()
             verify_snapshot(record['snapshot'])
         def progress(number, total, key, status):
             labels = {'requesting': '正在请求模型', 'succeeded': '已核验保存', 'resumed': '复用已核验结果',
@@ -246,12 +264,14 @@ def run_job(record, task_id):
             method=config['structured_method'], max_input_chars=config['max_input_chars'],
             progress=progress, verify_input=check)
         verify_snapshot(record['snapshot'])
+        if binding:
+            binding.check()
         completed = sum(r['status'] == 'succeeded' for r in results)
         failed = next((r.get('error') for r in results if r['status'] != 'succeeded'), None)
         owned_update(record, task_id, status='succeeded' if completed == len(results) else 'failed', progress=100,
             result_id=record['id'], completed_claims=completed, total_claims=len(results),
             stage=f'辅助评审完成：{completed}/{len(results)} 条' if not failed else f'已保存 {completed}/{len(results)} 条，可继续未完成项',
-            error={key: failed[key] for key in ('code', 'message') if key in failed} | {'retryable': True} if failed else None)
+            error={key: failed[key] for key in ('code', 'message') if key in failed} | {'retryable': failed.get('code') != 'RUNTIME_SNAPSHOT_UNAVAILABLE'} if failed else None)
     except Exception as exc:
         if isinstance(exc, (sqlite3.Error, OSError, SQLAlchemyError)):
             error = {'code': 'CLAIM_REVIEW_STORAGE_ERROR', 'message': '无法读取原文或保存评审，请检查数据库与本地存储。'}
@@ -259,13 +279,13 @@ def run_job(record, task_id):
             error, _ = error_info(exc)
         try:
             owned_update(record, task_id, status='failed', stage='评审未完成，已保存结果保留',
-                         error={key: error[key] for key in ('code', 'message')} | {'retryable': True})
+                         error={key: error[key] for key in ('code', 'message')} | {'retryable': not isinstance(exc, RuntimeUnavailable)})
         except (RuntimeError, sqlite3.Error, OSError):
             pass
 
 
 @router.post('/analyses/{analysis_id}/claim-reviews', status_code=202)
-def start_review(analysis_id: str, background_tasks: BackgroundTasks):
+def start_review(analysis_id: str, background_tasks: BackgroundTasks, resume_review_id: str | None = Query(default=None), new_run: bool = False):
     try:
         snapshot = load_result(analysis_id)
         if snapshot is None:
@@ -274,10 +294,29 @@ def start_review(analysis_id: str, background_tasks: BackgroundTasks):
         items = build_items(snapshot)
         if not items:
             raise HTTPException(422, detail='这份分析没有可评审的结论。')
-        settings = model_settings()
-        config = configuration(snapshot, settings)
+        previous = None
+        if new_run and isinstance(resume_review_id, str):
+            raise HTTPException(422, detail='新建评审与继续旧评审不能同时指定。')
+        if isinstance(resume_review_id, str):
+            with connection() as db:
+                initialize(db)
+                previous = read_record(db, resume_review_id)
+            if previous is None or previous['analysis_id'] != analysis_id:
+                raise HTTPException(422, detail='只能继续对应分析版本的评审。')
+            if not previous.get('runtime_bindings') and runtime_bindings.enabled():
+                raise RuntimeUnavailable('历史评审没有运行快照，请明确新建评审。')
+        from api.tasks import CURRENT_TASK
+        parent = CURRENT_TASK.get()
+        execution_parent = parent if parent and parent.get('execution_review') else None
+        bundle = (runtime_bindings.capture_bundle() if new_run and (snapshot.get('runtime_bindings') or runtime_bindings.enabled())
+                  else runtime_bindings.bundle_for(execution_parent or previous or snapshot))
+        binding = runtime_bindings.restore(bundle, 'claim_review') if bundle else None
+        settings = binding.settings if binding else model_settings()
+        config = configuration(snapshot, settings, binding) if binding else configuration(snapshot, settings)
         key = review_run_key(items, config, method=config['structured_method'], max_input_chars=config['max_input_chars'])
         identifier = 'claim_review_' + key
+        if previous and previous['id'] != identifier:
+            raise RuntimeUnavailable('原评审配置或材料不可恢复，拒绝混用检查点。')
         with connection() as db:
             initialize(db)
             db.execute('BEGIN IMMEDIATE')
@@ -295,16 +334,28 @@ def start_review(analysis_id: str, background_tasks: BackgroundTasks):
                 'model_name': config['model_name'], 'policy_version': POLICY_VERSION, 'context_policy': CONTEXT_POLICY}
             if not existing:
                 record['legacy_imported_claims'] = import_legacy_results(db, record)
+            previous_task_id = record.get('task_id')
             record['task_id'] = task_id
             task = {'id': task_id, 'type': 'claim_review', 'paper_id': record['paper_id'], 'analysis_id': analysis_id,
                 'claim_review_id': identifier, 'status': 'queued', 'progress': 0, 'stage': '等待逐条辅助语义评审',
-                'result_id': None, 'error': None, 'model_name': config['model_name'], 'http_backend': model_http_backend(),
+                'result_id': None, 'error': None, 'model_name': config['model_name'], 'http_backend': binding.runtime.backend if binding else model_http_backend(),
                 'read_timeout': config['timeout'], 'created_at': timestamp, 'updated_at': timestamp}
+            task.update(runtime_bindings.metadata(bundle, 'claim_review'))
+            task = provenance.decorate(task, source=execution_parent or existing or ({} if new_run else snapshot),
+                                       parent_task_id=execution_parent['id'] if execution_parent else snapshot.get('source_task_id'))
+            if execution_parent:
+                task['analysis_task_id'] = snapshot.get('source_task_id')
+                task['execution_phase'] = 'review'
+            if existing:
+                task['resumed_from_task_id'] = previous_task_id
+            record.update(provenance.fields(task), **runtime_bindings.metadata(bundle, 'claim_review'))
             db.execute('INSERT OR REPLACE INTO claim_reviews VALUES (?,?,?,?)',
                        (identifier, analysis_id, record['created_at'], json.dumps(record, ensure_ascii=False)))
             db.execute('INSERT INTO tasks VALUES (?,?)', (task_id, json.dumps(task, ensure_ascii=False)))
         background_tasks.add_task(run_job, record, task_id)
         return {'task_id': task_id, 'review_id': identifier, 'reused': False}
+    except RuntimeUnavailable as exc:
+        raise runtime_bindings.unavailable(exc) from None
     except SourcesChanged as exc:
         raise HTTPException(409, detail=str(exc)) from None
     except (ValueError, KeyError, TypeError) as exc:

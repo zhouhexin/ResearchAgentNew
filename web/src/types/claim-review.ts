@@ -15,3 +15,5 @@ export interface ClaimReviewRecord {
  task:TaskInfo;items:ClaimReviewItem[];total:number;completed:number
  quote_protocol?:'references-v2'|'verbatim-v1';legacy_reused?:number
 }
+
+export type ClaimReviewSummary=Pick<ClaimReviewRecord,'id'|'analysis_id'|'task'|'is_current'|'model_name'|'total'|'completed'|'quote_protocol'|'legacy_reused'>

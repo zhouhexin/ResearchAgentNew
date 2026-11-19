@@ -139,7 +139,7 @@ def test_edit_and_save_revalidates_and_checks_revision(client, model):
     response = client.put(url, json={'plan': value, 'expected_revision': 1})
     assert response.status_code == 200, response.text
     assert response.json()['revision'] == 2 and response.json()['edited_by_user'] is True
-    assert response.json()['capabilities']['executable_actions'] == ['search_papers', 'screen_papers', 'acquire_fulltext', 'analyze_papers', 'compare_papers', 'generate_review']
+    assert response.json()['capabilities']['executable_actions'] == ['select_library_papers', 'search_papers', 'screen_papers', 'acquire_fulltext', 'analyze_papers', 'compare_papers', 'generate_review']
     assert response.json()['plan']['scope']['start_year'] == 2021
     assert client.put(url, json={'plan': value, 'expected_revision': 1}).status_code == 409
     value['scope'].update(start_year=2026, end_year=2020)

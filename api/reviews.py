@@ -22,6 +22,8 @@ from api.analyses import model_settings, safe_source
 from api.analysis_results import load_result as load_analysis, load_results, with_current_state
 from api.review_results import complete_review, load_review, with_review_state
 from api.tasks import create_task, update_task
+from api import runtime_bindings, provenance, tasks
+from agent.runtime_snapshot import RuntimeUnavailable
 from review.questions import suggest_questions, QUESTION_PROMPT, QuestionSuggestions
 from review.db_guard import verify_sources_in_session
 from review.loader import parse_analyses
@@ -52,6 +54,7 @@ class ReviewSelection(BaseModel):
 
 class ReviewRequest(ReviewSelection):
     topic: str = Field(min_length=1, max_length=1000)
+    source_question_task_id: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode='after')
     def valid_topic(self):
@@ -134,6 +137,7 @@ def compare_papers(body: ReviewSelection):
             'matrix': matrix_payload(snapshots, papers)}
 
 
+@runtime_bindings.task_worker
 def run_question_suggestions(task_id, snapshots, papers, settings):
     engine = None
     try:
@@ -142,7 +146,10 @@ def run_question_suggestions(task_id, snapshots, papers, settings):
         with Session() as session:
             verify_inputs(session, snapshots, papers)
         update_task(task_id, progress=30, stage='正在根据所选论文推荐研究问题')
-        with analysis_llm(read_timeout=settings['timeout'], retries=settings['retries'], trust_env=True) as llm:
+        binding = runtime_bindings.for_task(task_id, 'questions')
+        if binding:
+            settings = binding.settings
+        with (binding.llm() if binding else analysis_llm(read_timeout=settings['timeout'], retries=settings['retries'], trust_env=True)) as llm:
             suggestions = suggest_questions(llm, papers, method=settings['method'])
         with Session.begin() as session:
             session.scalars(select(PaperDocumentRecord).where(PaperDocumentRecord.id.in_([p.document_id for p in papers])).order_by(PaperDocumentRecord.id).with_for_update()).all()
@@ -152,7 +159,9 @@ def run_question_suggestions(task_id, snapshots, papers, settings):
                         question_suggestions=suggestions.model_dump(mode='json')['questions'])
     except Exception as exc:
         diagnostic, retryable = None, True
-        if isinstance(exc, CodexExecutionError):
+        if isinstance(exc, RuntimeUnavailable):
+            code, message, retryable = exc.code, str(exc), False
+        elif isinstance(exc, CodexExecutionError):
             code, message, diagnostic, retryable = exc.code, str(exc), exc.diagnostic, exc.retryable
         elif isinstance(exc, APITimeoutError):
             diagnostic = model_timeout_diagnostic(exc, settings['timeout'])
@@ -190,22 +199,41 @@ def run_question_suggestions(task_id, snapshots, papers, settings):
 def start_question_suggestions(body: ReviewSelection, background_tasks: BackgroundTasks):
     snapshots, papers = prepare_selection(body)
     try:
-        settings = model_settings()
+        bundle = runtime_bindings.bundle_for()
+        binding = runtime_bindings.restore(bundle, 'questions') if bundle else None
+        settings = binding.settings if binding else model_settings()
         versions = sorted((paper.paper_id, snapshot['id']) for paper, snapshot in zip(papers, snapshots))
-        key = hashlib.sha256(json.dumps([versions, model_name(), model_endpoint(), settings['method'],
+        key = hashlib.sha256(json.dumps([versions, binding.metadata if binding else [model_name(), model_endpoint()], settings['method'],
                                         QUESTION_PROMPT, QuestionSuggestions.model_json_schema()], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         task = create_task(task_type='review_questions', stage='等待推荐研究问题', deduplicate=True, dedup_key=key,
                            metadata={'paper_ids': [p.paper_id for p in papers], 'analysis_ids': [s['id'] for s in snapshots],
-                                     'model_name': model_name(), 'http_backend': model_http_backend(), 'read_timeout': settings['timeout']})
+                                     'model_name': binding.runtime.model if binding else model_name(), 'http_backend': binding.runtime.backend if binding else model_http_backend(), 'read_timeout': settings['timeout'],
+                                     **runtime_bindings.metadata(bundle, 'questions')})
         if not task.get('_reused'):
             background_tasks.add_task(run_question_suggestions, task['id'], snapshots, papers, settings)
         return {'task_id': task['id'], 'reused': bool(task.get('_reused'))}
+    except RuntimeUnavailable as exc:
+        raise runtime_bindings.unavailable(exc) from None
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from None
     except (sqlite3.Error, OSError):
         raise HTTPException(503, detail='暂时无法创建研究问题推荐任务。') from None
 
 
+def verify_linked_review_context(context):
+    if not context or not context.get('review_selection_id'):
+        return
+    from api import coverage
+    try:
+        run=coverage.source_run(context['plan_id'],context['execution_id'])
+        if run.get('review_selection_id')!=context['review_selection_id']:
+            raise RuntimeUnavailable('报告关联的评审选择已变化。')
+    except HTTPException as exc:
+        if exc.status_code>=500:raise
+        raise RuntimeUnavailable('报告关联的评审或执行材料已变化，请重新确认版本。') from None
+
+
+@runtime_bindings.task_worker
 def run_review(task_id, snapshots, papers, topic, settings, research_context=None):
     engine = None
     try:
@@ -213,10 +241,14 @@ def run_review(task_id, snapshots, papers, topic, settings, research_context=Non
         engine, Session = make_db(os.environ['DATABASE_URL'])
         with Session() as session:
             verify_inputs(session, snapshots, papers)
+        verify_linked_review_context(research_context)
         csv = render_matrix_csv(papers)
         update_task(task_id, progress=30, stage='比较矩阵已生成，正在撰写带解释和比较依据的详细综述；可能需要数分钟')
-        with analysis_llm(read_timeout=settings['timeout'], retries=settings['retries'], trust_env=True,
-                          max_output_tokens=settings['output_tokens']) as llm:
+        binding = runtime_bindings.for_task(task_id, 'review')
+        if binding:
+            settings = binding.settings
+        with (binding.llm() if binding else analysis_llm(read_timeout=settings['timeout'], retries=settings['retries'], trust_env=True,
+                          max_output_tokens=settings['output_tokens'])) as llm:
             focus=topic
             if research_context:
                 focus+='\n研究目标：'+research_context['goal']
@@ -227,12 +259,22 @@ def run_review(task_id, snapshots, papers, topic, settings, research_context=Non
         update_task(task_id, progress=85, stage='正在核验跨论文引用和原文版本')
         public_papers = [replace(paper, source_url=safe_source(paper.source_url), evidence_index={key: dict(value, source_url=safe_source(value['source_url'])) for key, value in paper.evidence_index.items()}) for paper in papers]
         payload = {'paper_ids': [p.paper_id for p in papers], 'analysis_ids': [s['id'] for s in snapshots],
-                   'topic': topic, 'model_name': model_name(), 'writing_profile': WRITING_PROFILE, 'draft': draft.model_dump(mode='json'),
+                   'topic': topic, 'model_name': binding.runtime.model if binding else model_name(), 'writing_profile': WRITING_PROFILE, 'draft': draft.model_dump(mode='json'),
                    'matrix': matrix_payload(snapshots, papers),
                    'evidence_index': {f'P{p.paper_id}:{key}': value for p in public_papers for key, value in p.evidence_index.items()},
                    'citation_index': build_citation_index(draft, public_papers)}
         if research_context:
             payload['research_context']=research_context
+        payload.update(provenance.fields(tasks.get_task(task_id)))
+        payload['source_task_id'] = task_id
+        source_task = tasks.get_task(task_id)
+        if source_task.get('source_question_task_id'):
+            payload['source_question_task_id'] = source_task['source_question_task_id']
+            payload['question_edited'] = source_task.get('question_edited')
+        if binding:
+            binding.check()
+            payload.update(binding.metadata)
+        verify_linked_review_context(research_context)
         markdown = render_saved_review(payload)
         with Session.begin() as session:
             # 按固定顺序锁定全文，核验通过后再原子发布报告与下载内容。
@@ -241,7 +283,9 @@ def run_review(task_id, snapshots, papers, topic, settings, research_context=Non
             complete_review(task_id, payload, markdown, csv)
     except Exception as exc:
         diagnostic = None
-        if isinstance(exc, CodexExecutionError):
+        if isinstance(exc, RuntimeUnavailable):
+            code, message = exc.code, str(exc)
+        elif isinstance(exc, CodexExecutionError):
             code, message, diagnostic = exc.code, str(exc), exc.diagnostic
         elif isinstance(exc, APITimeoutError):
             diagnostic = model_timeout_diagnostic(exc, settings['timeout'])
@@ -271,7 +315,7 @@ def run_review(task_id, snapshots, papers, topic, settings, research_context=Non
                 logger.warning('无法保存综述诊断：task=%s', task_id)
         logger.warning('多篇综述失败：task=%s error_type=%s code=%s diagnostic=%s', task_id, type(exc).__name__, code, diagnostic)
         try:
-            update_task(task_id, status='failed', stage='综述生成失败', error={'code': code, 'message': message, 'retryable': exc.retryable if isinstance(exc, CodexExecutionError) else True, **({'diagnostic': diagnostic} if diagnostic else {})})
+            update_task(task_id, status='failed', stage='综述生成失败', error={'code': code, 'message': message, 'retryable': False if isinstance(exc, RuntimeUnavailable) else exc.retryable if isinstance(exc, CodexExecutionError) else True, **({'diagnostic': diagnostic} if diagnostic else {})})
         except (sqlite3.Error, OSError):
             logger.error('无法保存综述失败状态：task=%s', task_id)
     finally:
@@ -281,23 +325,44 @@ def run_review(task_id, snapshots, papers, topic, settings, research_context=Non
 
 @router.post('', status_code=202)
 def start_review(body: ReviewRequest, background_tasks: BackgroundTasks):
+    if body.source_question_task_id:
+        source = tasks.get_task(body.source_question_task_id)
+        if source['type'] != 'review_questions' or source['status'] != 'succeeded':
+            raise HTTPException(422, detail='研究问题来源必须是已完成的推荐任务。')
+        snapshots, _ = prepare_selection(body)
+        if set(source.get('analysis_ids', [])) != {s['id'] for s in snapshots}:
+            raise HTTPException(409, detail='研究问题来源与本次分析版本不一致，请重新推荐或自行填写。')
+        with tasks.task_scope(source['id']):
+            return create_review(body, background_tasks)
     return create_review(body,background_tasks)
 
 
 def create_review(body,background_tasks,research_context=None):
     snapshots, papers = prepare_selection(body)
     try:
-        settings = model_settings()
-        settings['output_tokens'] = review_output_tokens()
+        bundle = runtime_bindings.bundle_for()
+        binding = runtime_bindings.restore(bundle, 'review') if bundle else None
+        settings = dict(binding.settings) if binding else model_settings()
+        if not binding:
+            settings['output_tokens'] = review_output_tokens()
         versions = sorted((p.paper_id, s['id']) for p, s in zip(papers, snapshots))
-        key = hashlib.sha256(json.dumps([versions, body.topic, model_name(), model_endpoint(), WRITING_PROFILE, settings['output_tokens']], ensure_ascii=False).encode()).hexdigest()
+        key = hashlib.sha256(json.dumps([versions, body.topic, body.source_question_task_id,
+            binding.metadata if binding else [model_name(), model_endpoint()], WRITING_PROFILE, settings['output_tokens']], ensure_ascii=False).encode()).hexdigest()
         if research_context:key=hashlib.sha256(json.dumps([key,research_context],ensure_ascii=False,sort_keys=True).encode()).hexdigest()
         task = create_task(task_type='review_generation', stage='等待生成比较矩阵与综述', deduplicate=True, dedup_key=key,
                            metadata={'paper_ids': body.paper_ids, 'analysis_ids': [s['id'] for s in snapshots], 'topic': body.topic,
-                                     'model_name': model_name(), 'http_backend': model_http_backend(), 'read_timeout': settings['timeout']})
+                                     'research_questions': [body.topic],
+                                     **({'source_question_task_id': body.source_question_task_id,
+                                         'question_edited': body.topic not in [q['question'] for q in
+                                            (tasks.CURRENT_TASK.get() or {}).get('question_suggestions', [])]}
+                                        if body.source_question_task_id else {}),
+                                     'model_name': binding.runtime.model if binding else model_name(), 'http_backend': binding.runtime.backend if binding else model_http_backend(), 'read_timeout': settings['timeout'],
+                                     **runtime_bindings.metadata(bundle, 'review')})
         if not task.get('_reused'):
             background_tasks.add_task(run_review, task['id'], snapshots, papers, body.topic, settings, research_context)
         return {'task_id': task['id'], 'reused': bool(task.get('_reused'))}
+    except RuntimeUnavailable as exc:
+        raise runtime_bindings.unavailable(exc) from None
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from None
     except (sqlite3.Error, OSError):
@@ -321,6 +386,18 @@ def render_saved_review(payload):
             markdown += (f"- P{coverage['paper_id']}：{coverage['scope']}，阅读 "
                          f"{coverage['selected_chunks']}/{coverage['total_chunks']} 个片段。"
                          + coverage.get('note', '') + '\n')
+        if context.get('auxiliary_reviews'):
+            markdown += '\n### 辅助评审记录\n\n模型判断供人工核对；本报告未据标签自动删除或改写分析结论。\n\n'
+            for review in context['auxiliary_reviews']:
+                markdown += f"- P{review['paper_id']}：{review['review_id']}；分析版本：{review['analysis_id']}\n"
+    if payload.get('interaction_id'):
+        markdown += '\n## 执行来源\n\n'
+        for key, label in (('interaction_id', '交互'), ('source_task_id', '来源任务'),
+                           ('agent_version_id', '执行版本'), ('runtime_snapshot_id', '运行快照'),
+                           ('source_question_task_id', '研究问题推荐任务')):
+            if payload.get(key):
+                markdown += f'- {label}：{payload[key]}\n'
+        markdown += '- 确认的研究问题：' + payload['topic'] + '\n'
     return markdown
 
 
@@ -334,6 +411,16 @@ def read_review(review_id):
         engine, Session = make_db(os.environ['DATABASE_URL'])
         with Session() as session:
             payload = with_review_state(payload, session)
+        if payload.get('research_context',{}).get('review_selection_id'):
+            from api.analysis_runtime import RuntimeStorageUnavailable
+            try:
+                verify_linked_review_context(payload['research_context'])
+                payload['review_links_current']=True
+            except RuntimeStorageUnavailable:
+                raise
+            except (RuntimeUnavailable, ValueError):
+                payload['review_links_current']=False
+                payload['is_current']=False
         # 只从当初冻结的分析和原文生成展示信息，历史报告不借用较新版本。
         payload['citation_index'] = build_citation_index(
             ReviewDraft.model_validate(payload['draft']), snapshot_papers(payload))

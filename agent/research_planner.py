@@ -69,8 +69,8 @@ class ResearchPlanningError(ValueError):
 
 def planning_capabilities():
     return {'search_sources': ['arxiv', *('openalex_'+s for s in VENUES)], 'actions': ACTION_LABELS, 'paper_limit': {'min': 2, 'max': 5},
-            'venues':{slug:value['acronym'] for slug,value in VENUES.items()}, 'venue_platforms':VENUE_PLATFORMS, 'execution_available': False, 'executable_actions': ['search_papers', 'screen_papers', 'acquire_fulltext', 'analyze_papers', 'compare_papers', 'generate_review'],
-            'notice': '已接通 arXiv 与目录中会议/期刊的检索及摘要初筛。OpenAlex 发现候选，正式论文集、录用记录或出版方 DOI 元数据核验发表身份；人工确认2–5篇候选后可串联全文获取与全量分析；确认研究问题后可继续比较、生成综述并导出，按本轮固定计划和分析版本执行。'}
+            'venues':{slug:value['acronym'] for slug,value in VENUES.items()}, 'venue_platforms':VENUE_PLATFORMS, 'execution_available': False, 'executable_actions': ['select_library_papers', 'search_papers', 'screen_papers', 'acquire_fulltext', 'analyze_papers', 'compare_papers', 'generate_review'],
+            'notice': '支持从已有文献库选择2–5篇有可读全文的论文，固定分析版本并补齐阅读，可选辅助评审，继续比较、综述和导出；此入口不要求外部检索。也支持 arXiv 及目录中会议/期刊的检索初筛，OpenAlex 发现候选、正式来源核验发表身份。按已保存计划分阶段执行。'}
 
 
 PLANNING_PROMPT = """

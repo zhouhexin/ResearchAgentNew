@@ -39,12 +39,12 @@ async function refreshDetail(){
   error.value=''
  }catch(e){if(current===detailVersion)error.value=(e as Error).message}
 }
-async function start(){
+async function start(resume=true){
  if(starting.value||active.value||mode()==='demo'||props.analysis.is_current===false)return
  const analysisId=props.analysis.id,current=version
  starting.value=true;error.value=''
  try{
-  const response=await api.startClaimReview(analysisId)
+  const response=await api.startClaimReview(analysisId,resume&&task.value?.status==='failed'?record.value?.id:undefined,!resume)
   if(analysisId!==props.analysis.id||current!==version)return
   selected.value=response.review_id
   await refresh()
@@ -68,7 +68,7 @@ function citation(evidenceId:string):ReviewCitation|undefined{
 <template>
  <section class="panel claim-panel" aria-label="辅助语义评审">
   <div class="flex-between claim-heading"><div><h3>辅助语义评审</h3><p class="note">逐条核对结论是否得到所给原文支持。模型判断供人工核查，原分析保持不变。</p></div>
-   <div class="button-row"><el-button :disabled="loading||starting" @click="refresh">刷新评审</el-button><el-button type="primary" :loading="starting" :disabled="loading||active||mode()==='demo'||analysis.is_current===false" @click="start">{{task?.status==='failed'?'继续未完成评审':'辅助语义评审'}}</el-button></div>
+   <div class="button-row"><el-button :disabled="loading||starting" @click="refresh">刷新评审</el-button><el-button v-if="task?.status==='failed'" :disabled="loading||starting||active||analysis.is_current===false" @click="start(false)">新建评审</el-button><el-button type="primary" :loading="starting" :disabled="loading||active||mode()==='demo'||analysis.is_current===false" @click="start()">{{task?.status==='failed'?'继续未完成评审':'辅助语义评审'}}</el-button></div>
   </div>
   <p class="note">支持带页码的 PDF 分析。新评审只让模型选择原文编号，引用由后端直接提取。每条结论联合核对全部证据；快速阅读的评审仍只覆盖本次分析范围。</p>
   <p v-if="mode()==='demo'" class="note">切换到真实 API 数据后，可发起评审。</p>

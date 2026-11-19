@@ -7,8 +7,9 @@ import type {ExecutionStep,ResearchExecution} from '../types/execution'
 import {useTaskStore} from '../stores/tasks'
 import TaskProgress from './TaskProgress.vue'
 import ReadingCoverage from './ReadingCoverage.vue'
-import PlanReportWorkspace from './PlanReportWorkspace.vue'
+import ExecutionResults from './ExecutionResults.vue'
 const props=defineProps<{record:ResearchPlanRecord;searchRun:ResearchSearchRun;selectedIds:string[];disabled?:boolean}>()
+const autoReview=ref(false)
 const readingMode=ref<'full'|'fast'>('full')
 const store=useTaskStore(),runs=ref<ResearchExecution[]>([]),selectedRun=ref(''),loading=ref(false),submitting=ref(false),error=ref('')
 const run=computed(()=>runs.value.find(r=>r.id===selectedRun.value)||runs.value[0])
@@ -31,11 +32,12 @@ async function load(quiet=false){
  }catch(e){if(current===version&&ticket===request)error.value=(e as Error).message}
  finally{if(current===version&&ticket===request)loading.value=false}
 }
+async function selectExecution(id:string){selectedRun.value=id;await load(true)}
 async function execute(resume=false){
  if(submitting.value||mode()==='demo'||(resume?(!run.value||run.value.status!=='failed'||active.value):!canStart.value))return
  const current=version;submitting.value=true;error.value=''
  try{
-  const response=resume?await api.resumePlanExecution(props.record.id,run.value!.id):await api.startPlanExecution(props.record.id,{expected_revision:props.record.revision,search_run_id:props.searchRun.id,candidate_ids:[...props.selectedIds],...(readingMode.value==='fast'?{analysis_scope:'fast' as const}:{})})
+  const response=resume?await api.resumePlanExecution(props.record.id,run.value!.id):await api.startPlanExecution(props.record.id,{expected_revision:props.record.revision,search_run_id:props.searchRun.id,candidate_ids:[...props.selectedIds],...(autoReview.value?{review_after_analysis:true}:{}),...(readingMode.value==='fast'?{analysis_scope:'fast' as const}:{})})
   if(current!==version)return
   selectedRun.value=response.execution_id
   await store.track(response.task_id)
@@ -53,29 +55,18 @@ onBeforeUnmount(()=>{version++;request++;clearTimeout(timer)})
   <p class="note">已选 {{selectedIds.length}} 篇；计划建议 {{searchRun.plan.scope.paper_limit}} 篇。本轮以你确认的选择为准。已有有效全文与完整分析会复用，失败可继续。</p>
   <p v-if="!supported" class="note">当前计划未包含全文获取和单篇分析步骤，请修改计划并保存、重新执行检索后再开始。</p>
   <div class="execution-actions"><label>阅读模式 <select :value="readingMode" :disabled="active||submitting" aria-label="计划论文阅读模式" @change="readingMode=($event.target as HTMLSelectElement).value as typeof readingMode"><option value="full">全量分析</option><option value="fast">快速阅读 · 正文关键章节优先</option></select></label>
+   <label><input :checked="autoReview" @change="autoReview=($event.target as HTMLInputElement).checked" type="checkbox" :disabled="active||submitting" aria-label="分析后自动辅助评审"/> 分析后自动辅助评审</label>
    <el-button type="primary" :disabled="!canStart" :loading="submitting" @click="execute()">确认所选论文并执行（{{selectedIds.length}}）</el-button>
    <el-button v-if="run?.status==='failed'" :disabled="submitting||active||mode()==='demo'" @click="execute(true)">继续本轮未完成部分</el-button>
    <el-button :disabled="loading||mode()==='demo'" @click="load()">刷新执行进度</el-button>
   </div>
+  <p v-if="autoReview" class="note">每篇分析完成后会逐条调用模型辅助评审，增加等待时间和用量。评审失败保留分析，只继续未完成评审；模型判断不代表人工确认。须启用完整运行配置固定。</p>
   <p v-if="readingMode==='fast'" class="note">快速阅读默认最多18个片段，优先覆盖正文关键章节；结果会标明覆盖范围，后续可另选全量模式补读。</p>
   <p v-if="disabled||searchRun.revision!==record.revision" class="note">新执行须使用已保存的当前计划版本；历史执行继续使用其原计划和选文。</p>
   <p v-if="error" role="alert" class="error-text">{{error}}</p>
   <template v-if="run">
    <label v-if="runs.length>1" class="execution-history">执行记录 <select :value="run.id" aria-label="全文分析执行记录" @change="selectedRun=($event.target as HTMLSelectElement).value"><option v-for="item in runs" :key="item.id" :value="item.id">第 {{item.revision}} 版 · {{names[item.status]}} · {{new Date(item.created_at).toLocaleString('zh-CN')}}</option></select></label>
-   <p class="note">第 {{run.revision}} 版计划 · {{run.analysis_scope==='fast'?'快速阅读':'全量分析'}} · 固定 {{run.papers.length}} 篇 · {{names[run.status]}} · {{run.papers.filter(p=>p.analysis.status==='succeeded').length}} / {{run.papers.length}} 篇分析完成</p>
-   <p v-if="run.error" class="error-text">{{run.error.code}} · {{run.error.message}}</p>
-   <article v-for="paper in run.papers" :key="paper.candidate_id" class="execution-paper">
-    <h4><RouterLink v-if="paper.paper_id" :to="`/papers/${paper.paper_id}`">{{paper.title}}</RouterLink><span v-else>{{paper.title}}</span></h4>
-    <p class="note">人工确认纳入 · 初筛：{{paper.screening.decision==='included'?'建议纳入':paper.screening.decision==='excluded'?'排除':'待确认'}}</p>
-    <div v-for="step in ['fulltext','analysis'] as const" :key="step" class="execution-step">
-     <p><strong>{{step==='fulltext'?'全文获取与解析':(run.analysis_scope==='fast'?'快速论文阅读':'全量论文分析')}}</strong> · {{label(paper[step])}} <RouterLink v-if="step==='fulltext'&&paper.fulltext.status==='succeeded'&&paper.fulltext.document_id&&paper.paper_id" :to="`/papers/${paper.paper_id}?tab=evidence`">查看原文</RouterLink><RouterLink v-if="step==='analysis'&&paper.analysis.status==='succeeded'&&paper.analysis.analysis_id" :to="`/analysis?analysisId=${encodeURIComponent(paper.analysis.analysis_id)}`">查看分析</RouterLink></p>
-     <TaskProgress v-if="['running','failed'].includes(paper[step].status)&&paper[step].task&&['queued','running','failed'].includes(paper[step].task!.status)" :task="paper[step].task!"/>
-     <p v-if="paper[step].error" class="error-text">{{paper[step].error!.code}} · {{paper[step].error!.message}}</p>
-    </div>
-    <ReadingCoverage :selection="paper.analysis.reading_selection||paper.analysis.task?.reading_selection"/>
-   </article>
-   <p v-if="run.status==='succeeded'" class="note">本轮全文获取与分析已完成。可在下方继续比较、综述和导出。</p>
-   <PlanReportWorkspace v-if="run.status==='succeeded'" :key="run.id" :execution="run"/>
+   <ExecutionResults :run="run" @execution-selected="selectExecution"/>
   </template>
   <p v-else class="note">{{loading?'正在读取执行记录…':'尚未开始本轮全文与分析。'}}</p>
  </section>

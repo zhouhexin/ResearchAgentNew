@@ -9,6 +9,8 @@ from fastapi import APIRouter,BackgroundTasks,HTTPException
 from pydantic import BaseModel,ConfigDict,Field,model_validator
 
 from api import tasks,reviews
+from api import runtime_bindings, provenance
+from agent.runtime_snapshot import RuntimeUnavailable
 from api.research_execution import initialize as initialize_execution,read_execution,public_run
 from agent.llm_runtime import model_name,model_endpoint
 
@@ -42,6 +44,10 @@ def source_run(plan_id,execution_id):
     if run['status']!='succeeded' or not all(p['analysis']['status']=='succeeded' and p['analysis'].get('analysis_id') for p in run['papers']):raise HTTPException(422,detail='请先完成本轮所选论文的全文与分析。')
     actions=[s['action'] for s in run['plan']['steps']]
     if 'compare_papers' not in actions or 'generate_review' not in actions or actions.index('compare_papers')>actions.index('generate_review'):raise HTTPException(422,detail='该版本计划未按顺序包含比较与综述步骤，请调整计划后执行。')
+    if run.get('review_selection_id'):
+        from api.execution_review_links import verify_linked_run
+        try:verify_linked_run(run)
+        except RuntimeUnavailable as exc:raise runtime_bindings.unavailable(exc) from None
     return run
 
 
@@ -56,7 +62,17 @@ def context(run,dimensions):
         if snapshot is None or snapshot['paper']['id']!=p['paper_id']:raise HTTPException(422,detail='本轮分析版本已缺失或归属不符，请重新分析。')
         doc=snapshot['document'];reading=snapshot.get('reading_selection') or {}
         coverage.append(dict(paper_id=p['paper_id'],analysis_id=snapshot['id'],scope=snapshot.get('batch_summary',{}).get('scope','unknown'),selected_chunks=doc['selected_chunks'],total_chunks=doc['total_chunks'],note=reading.get('note','仅综合所选分析与证据，不代表完整领域查新。'),reading_selection=reading or None))
-    return dict(plan_id=run['plan_id'],plan_revision=run['revision'],execution_id=run['id'],goal=run['goal'],comparison_dimensions=dimensions,reading_coverage=coverage)
+    result = dict(plan_id=run['plan_id'],plan_revision=run['revision'],execution_id=run['id'],goal=run['goal'],comparison_dimensions=dimensions,reading_coverage=coverage)
+    if run.get('source') == 'library':
+        result['selection_source'] = 'library'
+    if run.get('review_selection_id'):
+        result['review_selection_id']=run['review_selection_id']
+    if run.get('review_after_analysis') or run.get('review_selection_id'):
+        result['auxiliary_reviews'] = [dict(paper_id=p['paper_id'], analysis_id=p['analysis']['analysis_id'],
+            review_id=p['review']['review_id'], task_id=p['review']['task_id'],
+            verdict_counts=p['review'].get('verdict_counts'), note='模型辅助判断，未经人工裁定，不等于结论已被证明。')
+            for p in run['papers'] if p.get('review',{}).get('status')=='succeeded' and p['review'].get('review_id')]
+    return result
 
 
 def write(record,**changes):
@@ -74,8 +90,12 @@ def tasks_state(db,task_id):
     return json.loads(row[0]) if row else {'status':'failed','error':{'code':'TASK_MISSING','message':'任务记录缺失'}}
 
 
+@runtime_bindings.task_worker
 def worker(record):
     try:
+        binding = runtime_bindings.for_task(record['task_id'], 'review')
+        if record.get('context',{}).get('review_selection_id'):
+            source_run(record['plan_id'],record['execution_id'])
         tasks.update_task(record['task_id'],status='running',stage='正在核对本轮固定分析版本并生成比较矩阵',progress=10)
         # 每次重试都复核当前证据；沿用固定分析编号，不切换到最新版本。
         body=reviews.ReviewSelection.model_validate(record['selection'])
@@ -101,12 +121,14 @@ def worker(record):
             error=child.get('error') or {'code':'REVIEW_RUNNING','message':'相同综述已有任务运行，待其完成后重试。','retryable':True}
             write(record,status='failed',error=error)
             tasks.update_task(record['task_id'],status='failed',stage='综述未完成，比较结果已保留',error=error);return
+        if record.get('context',{}).get('review_selection_id'):
+            source_run(record['plan_id'],record['execution_id'])
         result=reviews.get_review(child['result_id'])
         if not result.get('is_current'):raise HTTPException(409,detail='报告对应的原文已更新，请重新分析。')
         write(record,status='succeeded',review_id=result['id'],error=None)
         tasks.update_task(record['task_id'],status='succeeded',progress=100,stage='本轮比较与综述完成，可导出报告',result_id=result['id'],error=None)
     except Exception as exc:
-        error={'code':'PLAN_REPORT_FAILED','message':exc.detail if isinstance(exc,HTTPException) and isinstance(exc.detail,str) else '比较或综述执行失败；已有分析和比较保留，请重试。','retryable':True}
+        error={'code':exc.code if isinstance(exc, RuntimeUnavailable) else 'PLAN_REPORT_FAILED','message':str(exc) if isinstance(exc, RuntimeUnavailable) else exc.detail if isinstance(exc,HTTPException) and isinstance(exc.detail,str) else '比较或综述执行失败；已有分析和比较保留，请重试。','retryable':not isinstance(exc, RuntimeUnavailable)}
         try:
             write(record,status='failed',error=error)
             tasks.update_task(record['task_id'],status='failed',stage='本轮报告未完成',error=error)
@@ -127,9 +149,13 @@ def start_report(plan_id:str,execution_id:str,body:ReportRequest,background_task
     selected=selection(run);reviews.prepare_selection(selected)
     info=context(run,body.comparison_dimensions)
     try:
-        settings=reviews.model_settings();output_tokens=reviews.review_output_tokens()
+        bundle = runtime_bindings.bundle_for(run)
+        binding = runtime_bindings.restore(bundle, 'review') if bundle else None
+        settings=binding.settings if binding else reviews.model_settings()
+        output_tokens=binding.settings['output_tokens'] if binding else reviews.review_output_tokens()
+    except RuntimeUnavailable as exc:raise runtime_bindings.unavailable(exc) from None
     except ValueError as exc:raise HTTPException(422,detail=str(exc)) from None
-    key=hashlib.sha256(json.dumps([execution_id,selected.model_dump(),body.model_dump(),model_name(),model_endpoint(),settings['method'],reviews.WRITING_PROFILE,output_tokens],sort_keys=True).encode()).hexdigest()
+    key=hashlib.sha256(json.dumps([execution_id,selected.model_dump(),body.model_dump(),binding.metadata if binding else [model_name(),model_endpoint()],settings['method'],reviews.WRITING_PROFILE,output_tokens],sort_keys=True).encode()).hexdigest()
     try:
         with tasks.connection() as db:
             initialize(db);db.execute('BEGIN IMMEDIATE')
@@ -145,10 +171,15 @@ def start_report(plan_id:str,execution_id:str,body:ReportRequest,background_task
             if record is None:record=dict(id='plan_report_'+uuid4().hex,plan_id=plan_id,execution_id=execution_id,input_key=key,revision=run['revision'],selection=selected.model_dump(),research_question=body.research_question,context=info,created_at=timestamp,comparison=None,review_id=None)
             record.update(task_id=task_id,status='queued',error=None)
             task=dict(id=task_id,type='plan_report',paper_id=None,plan_id=plan_id,plan_revision=run['revision'],search_run_id=run['search_run_id'],execution_id=execution_id,status='queued',progress=0,stage='等待比较与综述',result_id=None,error=None,created_at=timestamp,updated_at=timestamp)
+            task.update(provenance.fields(run), research_questions=[body.research_question],
+                        **runtime_bindings.metadata(bundle, 'review'))
+            task = provenance.decorate(task, source=run, parent_task_id=run['task_id'])
+            record.update(provenance.fields(task), **runtime_bindings.metadata(bundle, 'review'))
             db.execute('INSERT INTO tasks VALUES (?,?)',(task_id,json.dumps(task,ensure_ascii=False)))
             db.execute('INSERT OR REPLACE INTO plan_reports VALUES (?,?,?,?,?)',(record['id'],plan_id,execution_id,key,json.dumps(record,ensure_ascii=False)))
         background_tasks.add_task(worker,record)
         return {'task_id':task_id,'report_id':record['id'],'reused':False}
+    except RuntimeUnavailable as exc:raise runtime_bindings.unavailable(exc) from None
     except (sqlite3.Error,OSError):raise HTTPException(503,detail='无法保存计划报告任务。') from None
 
 

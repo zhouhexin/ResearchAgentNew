@@ -33,6 +33,15 @@ def parse_analyses(records: list[dict]) -> list[ReviewPaper]:
 
     if not 2 <= len(records) <= 5:
         raise ValueError("第一版需要 2～5 篇论文")
+    return _parse_records(records)
+
+
+def parse_analysis(record: dict) -> ReviewPaper:
+    """单篇版本取回复用同一核验，不改变多篇综述的数量要求。"""
+    return _parse_records([record])[0]
+
+
+def _parse_records(records: list[dict]) -> list[ReviewPaper]:
 
     papers = []
     seen = set()

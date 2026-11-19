@@ -22,6 +22,9 @@ from tools.venue_search.cvpr import search_cvpr_page, search_venue_page, VERSION
 from tools.open_access_pdf import FulltextError
 from tools.venue_search.catalog import selected_venues, validate_venues, supported_sources
 from tools.venue_search.extended import VERSION as EXTENDED_VERSION, SLUGS as EXTENDED_SLUGS
+from api import runtime_bindings, provenance
+from agent.runtime_snapshot import RuntimeUnavailable
+from tools.execution_config import scope as tool_scope
 
 router = APIRouter(prefix='/api/v1/agent/plans', tags=['计划检索与初筛'])
 logger = logging.getLogger(__name__)
@@ -77,11 +80,15 @@ def write_checkpoint(run, task_id, *, complete=False):
             db.execute('UPDATE tasks SET payload=? WHERE id=?', (json.dumps(task, ensure_ascii=False), task_id))
 
 
+@runtime_bindings.task_worker
 def run_search(task_id, run, settings):
     try:
         update_task(task_id, status='running', progress=2, stage='正在恢复已完成的检索与初筛检查点')
-        with analysis_llm(read_timeout=settings['timeout'], retries=settings['retries'], trust_env=True,
-                          max_output_tokens=6000) as llm:
+        binding = runtime_bindings.for_task(task_id, 'search')
+        if binding:
+            settings = binding.settings
+        with tool_scope(binding.tools['search'] if binding else None), (binding.llm() if binding else analysis_llm(read_timeout=settings['timeout'], retries=settings['retries'], trust_env=True,
+                          max_output_tokens=6000)) as llm:
             slugs = selected_venues(run)
             if slugs == ['cvpr']:
                 fetch = lambda query, **kwargs: search_cvpr_page(query, **kwargs, verified_main_only=run.get('verified_main_only', False))
@@ -89,14 +96,25 @@ def run_search(task_id, run, settings):
                 fetch = lambda query, **kwargs: search_venue_page(query, venue_slugs=slugs, **kwargs, verified_main_only=run.get('verified_main_only', False))
             else:
                 fetch = search_arxiv_page
+            if binding:
+                original_fetch = fetch
+                def fetch(*args, **kwargs):
+                    binding.check()
+                    result = original_fetch(*args, **kwargs)
+                    binding.check()
+                    return result
             graph = build_search_graph(llm, fetch=fetch,
                 checkpoint=lambda value: write_checkpoint(value, task_id),
                 progress=lambda **event: update_task(task_id, **event), method=settings['method'])
             result = graph.invoke({'run': run}, config={'recursion_limit': 5})
+        if binding:
+            binding.check()
         write_checkpoint(result['run'], task_id, complete=True)
     except Exception as exc:
         diagnostic, retryable = None, True
-        if isinstance(exc, CodexExecutionError):
+        if isinstance(exc, RuntimeUnavailable):
+            code, message, retryable = exc.code, str(exc), False
+        elif isinstance(exc, CodexExecutionError):
             code, message, diagnostic, retryable = exc.code, str(exc), exc.diagnostic, exc.retryable
         elif isinstance(exc, APITimeoutError):
             diagnostic = model_timeout_diagnostic(exc, settings['timeout'])
@@ -130,15 +148,23 @@ def run_search(task_id, run, settings):
 @router.post('/{plan_id}/search', status_code=202)
 def start_search(plan_id: str, body: SearchRequest, background_tasks: BackgroundTasks):
     try:
-        settings = model_settings()
-        fingerprint = hashlib.sha256(json.dumps([SEARCH_VERSION, SCREEN_PROMPT, ScreeningBatch.model_json_schema(),
-                    model_name(), model_endpoint(), settings['method'], body.per_query], sort_keys=True).encode()).hexdigest()
         with connection() as db:
             initialize(db)
             db.execute('BEGIN IMMEDIATE')
             saved = read_plan(db, plan_id)
             if saved['revision'] != body.expected_revision:
                 raise HTTPException(409, detail='计划版本已改变，请重新读取并确认后执行。')
+            prior = None
+            if not saved.get('runtime_bindings') and not body.refresh:
+                prior_rows = db.execute('SELECT payload FROM research_search_runs WHERE plan_id=? AND revision=? ORDER BY rowid DESC',
+                                        (plan_id, body.expected_revision)).fetchall()
+                prior = next((json.loads(row[0]) for row in prior_rows
+                              if json.loads(row[0]).get('runtime_bindings') and json.loads(row[0])['per_query'] == body.per_query), None)
+            bundle = runtime_bindings.bundle_for(prior or saved)
+            binding = runtime_bindings.restore(bundle, 'search') if bundle else None
+            settings = binding.settings if binding else model_settings()
+            fingerprint = hashlib.sha256(json.dumps([SEARCH_VERSION, SCREEN_PROMPT, ScreeningBatch.model_json_schema(),
+                binding.metadata if binding else [model_name(), model_endpoint()], settings['method'], body.per_query], sort_keys=True).encode()).hexdigest()
             plan = saved['plan']
             actions = [step['action'] for step in plan['steps']]
             if 'search_papers' not in actions or 'screen_papers' not in actions or not plan['search_queries']:
@@ -183,20 +209,30 @@ def start_search(plan_id: str, body: SearchRequest, background_tasks: Background
                        'created_at': timestamp, 'queries': [{'number': i, 'query': query, 'status': 'pending', 'items': [], 'total': None}
                                    for i, query in enumerate(plan['search_queries'], 1)],
                        'candidates': [], 'screenings': {}, 'duplicate_count': 0, 'skipped_count': 0, 'attempts': 0,
-                       'model_name': model_name(), 'source': 'openalex' if slugs else 'arxiv',
+                       'model_name': binding.runtime.model if binding else model_name(), 'source': 'openalex' if slugs else 'arxiv',
                        'venue_slug': slugs[0] if len(slugs)==1 else None, 'venue_slugs': slugs, 'verified_main_only': plan['scope'].get('verified_main_only', False), 'screening_basis': 'title_abstract',
                        'notice': ('、'.join(s.upper() for s in slugs)+' 通过 OpenAlex 检索，逐篇用对应官方论文集核验发表身份，按正式发表年份过滤；主会筛选只作用于本轮候选。' if slugs else
                                  '本轮只检索每个检索词的前若干条 arXiv 结果，按首次提交年份过滤。') + '初筛仅依据标题和摘要，需人工确认，不代表全文核验或完整领域查新。'}
+            previous_task_id = run.get('task_id')
             run.update(task_id=task_id, status='queued', error=None, updated_at=timestamp, attempts=run['attempts']+1)
             task = {'id': task_id, 'type': 'research_search', 'paper_id': None, 'plan_id': plan_id,
                     'plan_revision': saved['revision'], 'search_run_id': run['id'], 'research_goal': saved['goal'],
                     'status': 'queued', 'stage': '等待执行计划检索与摘要初筛', 'progress': 0, 'result_id': None,
                     'error': None, 'created_at': timestamp, 'updated_at': timestamp}
+            task.update(provenance.fields(prior or {}), **provenance.plan_fields(saved))
+            task.update(runtime_bindings.metadata(bundle, 'search'))
+            if previous_task_id:
+                task['resumed_from_task_id'] = previous_task_id
+            task = provenance.decorate(task, source=prior or saved, parent_task_id=saved.get('source_task_id'))
+            task['plan_steps'] = [step['number'] for step in plan['steps'] if step['action'] in {'search_papers', 'screen_papers'}]
+            run.update(provenance.fields(task), **runtime_bindings.metadata(bundle, 'search'))
             db.execute('INSERT INTO tasks VALUES (?,?)', (task_id, json.dumps(task, ensure_ascii=False)))
             db.execute('INSERT OR REPLACE INTO research_search_runs VALUES (?,?,?,?,?)',
                        (run['id'], plan_id, saved['revision'], fingerprint, json.dumps(run, ensure_ascii=False)))
         background_tasks.add_task(run_search, task_id, run, settings)
         return {'task_id': task_id, 'run_id': run['id'], 'reused': False}
+    except RuntimeUnavailable as exc:
+        raise runtime_bindings.unavailable(exc) from None
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from None
     except (sqlite3.Error, OSError):

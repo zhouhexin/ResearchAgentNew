@@ -37,9 +37,9 @@ def load_paper_context(
     database_url: str,
     paper_id: int,
     max_chunks: int | None = 12,
-    *, fast: bool = False,
+    *, fast: bool = False, document_id: int | None = None,
 ) -> PaperContext:
-    """加载论文和部分原文片段。"""
+    """加载论文原文；指定 document_id 时只读取该论文的原文档，不回退最新版本。"""
 
     if max_chunks is not None and max_chunks < 2:
         raise ValueError("max_chunks 至少为 2")
@@ -68,6 +68,7 @@ def load_paper_context(
                     PaperDocumentRecord.paper_id
                     == paper_id
                 )
+                .where(PaperDocumentRecord.id == document_id if document_id is not None else True)
                 .order_by(
                     case(
                         (

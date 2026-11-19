@@ -14,7 +14,14 @@
     "test:questions": "node scripts/question-picker-check.mjs",
     "test:planning": "node scripts/planning-check.mjs",
     "test:citations": "node scripts/citation-check.mjs",
-    "test:claim-review": "node scripts/claim-review-check.mjs"
+    "test:claim-review": "node scripts/claim-review-check.mjs",
+    "test:execution-review": "node scripts/execution-review-check.mjs",
+    "test:library-execution": "node scripts/library-execution-check.mjs",
+    "test:coverage": "node scripts/coverage-check.mjs",
+    "test:reread": "node scripts/reread-check.mjs",
+    "test:supplement-search": "node scripts/supplement-search-check.mjs",
+    "test:supplement-readings": "node scripts/supplement-readings-check.mjs",
+    "test:execution-review-links": "node scripts/execution-review-links-check.mjs"
   },
   "dependencies": {
     "vue": "3.5.32",

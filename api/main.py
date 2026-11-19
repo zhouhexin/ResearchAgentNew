@@ -29,6 +29,11 @@ from api.plan_reports import router as plan_reports_router
 from api.venues import router as venues_router
 from api.abstract_translations import router as abstract_translations_router
 from api.claim_reviews import router as claim_reviews_router
+from api.coverage import router as coverage_router
+from api.rereads import router as rereads_router
+from api.supplement_search import router as supplement_search_router
+from api.supplement_readings import router as supplement_readings_router
+from api.execution_review_links import router as execution_review_links_router
 from api.analyses import model_settings
 from agent.llm_runtime import model_http_backend, model_name
 
@@ -59,6 +64,11 @@ app.include_router(abstract_translations_router)
 app.include_router(analyses_router)
 app.include_router(claim_reviews_router)
 app.include_router(reviews_router)
+app.include_router(coverage_router)
+app.include_router(rereads_router)
+app.include_router(supplement_search_router)
+app.include_router(supplement_readings_router)
+app.include_router(execution_review_links_router)
 
 @app.get("/api/v1/ping")
 def ping():

@@ -18,6 +18,8 @@ from agent.research_planner import (PLAN_VERSION, PLANNING_PROMPT, ResearchPlan,
                                     build_planning_graph, planning_capabilities, validate_research_plan)
 from api.analyses import model_settings
 from api.tasks import connection, create_task, now, update_task
+from api import tasks, runtime_bindings, provenance
+from agent.runtime_snapshot import RuntimeUnavailable
 
 router = APIRouter(prefix='/api/v1/agent/plans', tags=['研究目标与计划'])
 logger = logging.getLogger(__name__)
@@ -26,6 +28,7 @@ logger = logging.getLogger(__name__)
 class PlanRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     goal: str = Field(min_length=2, max_length=6000)
+    resume_task_id: str | None = None
 
 
 class PlanUpdate(BaseModel):
@@ -37,12 +40,26 @@ class PlanUpdate(BaseModel):
 def initialize(db):
     db.execute('''CREATE TABLE IF NOT EXISTS research_plans (
         id TEXT PRIMARY KEY, payload TEXT NOT NULL)''')
+    # 只保存修订定位编号；正文仍在 PostgreSQL，与当前计划同一 SQLite 事务提交定位。
+    db.execute('''CREATE TABLE IF NOT EXISTS research_plan_revision_links (
+        plan_id TEXT NOT NULL, revision INTEGER NOT NULL, snapshot_id TEXT NOT NULL,
+        PRIMARY KEY(plan_id, revision))''')
+
+
+def link_revision(db, plan):
+    if plan.get('plan_snapshot_id'):
+        db.execute('INSERT OR IGNORE INTO research_plan_revision_links VALUES (?,?,?)',
+                   (plan['id'], plan['revision'], plan['plan_snapshot_id']))
+        existing = db.execute('SELECT snapshot_id FROM research_plan_revision_links WHERE plan_id=? AND revision=?',
+                              (plan['id'], plan['revision'])).fetchone()
+        if existing[0] != plan['plan_snapshot_id']:
+            raise RuntimeUnavailable('计划修订已经提交，不能改写历史定位。')
 
 
 def complete_plan(task_id, goal, plan, today):
     result = {'id': 'plan_' + uuid4().hex, 'goal': goal, 'plan': plan.model_dump(mode='json'),
               'revision': 1, 'status': 'draft', 'created_at': now(), 'updated_at': now(),
-              'planning_date': today.isoformat(), 'model_name': model_name(), 'source_task_id': task_id,
+              'planning_date': today.isoformat(), 'model_name': tasks.get_task(task_id).get('model_name'), 'source_task_id': task_id,
               'capabilities': planning_capabilities()}
     with connection() as db:
         initialize(db)
@@ -51,27 +68,41 @@ def complete_plan(task_id, goal, plan, today):
         if row is None:
             raise ValueError('规划任务不存在')
         task = json.loads(row[0])
+        result.update(provenance.fields(task))
+        result['model_name'] = task.get('model_name', result['model_name'])
+        if result.get('interaction_id'):
+            result['plan_snapshot_id'] = provenance.freeze_plan(result)
+            link_revision(db, result)
         if task['status'] not in {'queued', 'running'}:
             raise ValueError('规划任务已结束，不能再发布结果')
         db.execute('INSERT INTO research_plans VALUES (?,?)', (result['id'], json.dumps(result, ensure_ascii=False)))
         task.update(status='succeeded', progress=100, stage='研究目标与执行计划已生成，尚未执行',
                     result_id=result['id'], error=None, updated_at=now())
+        if result.get('interaction_id'):
+            task.update(plan_id=result['id'], plan_revision=1, plan_snapshot_id=result['plan_snapshot_id'],
+                        research_questions=plan.research_questions, research_scope=plan.scope.model_dump(mode='json'))
         db.execute('UPDATE tasks SET payload=? WHERE id=?', (json.dumps(task, ensure_ascii=False), task_id))
     return result
 
 
+@runtime_bindings.task_worker
 def run_planning(task_id, goal, settings, today):
     try:
         update_task(task_id, status='running', progress=5, stage='正在准备研究目标理解')
-        with analysis_llm(read_timeout=settings['timeout'], retries=settings['retries'], trust_env=True,
-                          max_output_tokens=settings['output_tokens']) as llm:
+        binding = runtime_bindings.for_task(task_id, 'planning')
+        if binding:
+            settings = binding.settings
+        with (binding.llm() if binding else analysis_llm(read_timeout=settings['timeout'], retries=settings['retries'], trust_env=True,
+                          max_output_tokens=settings['output_tokens'])) as llm:
             graph = build_planning_graph(llm, method=settings['method'], today=today,
                                          progress=lambda **event: update_task(task_id, **event))
             result = graph.invoke({'goal': goal}, config={'recursion_limit': 5})
         complete_plan(task_id, goal, result['plan'], today)
     except Exception as exc:
         diagnostic, retryable = None, True
-        if isinstance(exc, CodexExecutionError):
+        if isinstance(exc, RuntimeUnavailable):
+            code, message, retryable = exc.code, str(exc), False
+        elif isinstance(exc, CodexExecutionError):
             code, message, diagnostic, retryable = exc.code, str(exc), exc.diagnostic, exc.retryable
         elif isinstance(exc, APITimeoutError):
             diagnostic = model_timeout_diagnostic(exc, settings['timeout'])
@@ -103,21 +134,37 @@ def start_planning(body: PlanRequest, background_tasks: BackgroundTasks):
     if len(goal) < 2:
         raise HTTPException(422, detail='请描述希望研究的主题与目标。')
     try:
-        settings, today = model_settings(), date.today()
+        previous = tasks.get_task(body.resume_task_id) if body.resume_task_id else None
+        if previous and (previous['type'] != 'research_planning' or previous.get('research_goal') != goal):
+            raise HTTPException(422, detail='只能继续同一研究目标的规划任务。')
+        if previous and not previous.get('runtime_bindings') and runtime_bindings.enabled():
+            raise RuntimeUnavailable('历史规划任务没有运行快照，请明确新建规划任务。')
+        bundle = runtime_bindings.bundle_for(previous)
+        binding = runtime_bindings.restore(bundle, 'planning') if bundle else None
+        settings, today = dict(binding.settings) if binding else model_settings(), date.today()
+        if previous and previous.get('planning_date'):
+            today = date.fromisoformat(previous['planning_date'])
         try:
-            settings['output_tokens'] = int(os.getenv('RESEARCH_PLAN_MAX_OUTPUT_TOKENS', '6000'))
+            if not binding:
+                settings['output_tokens'] = int(os.getenv('RESEARCH_PLAN_MAX_OUTPUT_TOKENS', '6000'))
         except ValueError:
             raise ValueError('RESEARCH_PLAN_MAX_OUTPUT_TOKENS 必须为正整数') from None
         if settings['output_tokens'] < 1:
             raise ValueError('RESEARCH_PLAN_MAX_OUTPUT_TOKENS 必须为正整数')
-        key = hashlib.sha256(json.dumps([goal, today.isoformat(), model_name(), model_endpoint(), settings['method'],
+        key = hashlib.sha256(json.dumps([goal, today.isoformat(), binding.metadata if binding else [model_name(), model_endpoint()], settings['method'],
                                         PLAN_VERSION, PLANNING_PROMPT, ResearchPlan.model_json_schema(), settings['output_tokens']], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         task = create_task(task_type='research_planning', stage='等待理解研究目标并制定计划', deduplicate=True, dedup_key=key,
-                           metadata={'research_goal': goal, 'model_name': model_name(), 'http_backend': model_http_backend(),
-                                     'read_timeout': settings['timeout']})
+                           metadata={**(provenance.fields(previous) if previous else {}),
+                                     'research_goal': goal, 'planning_date': today.isoformat(),
+                                     'model_name': binding.runtime.model if binding else model_name(),
+                                     'http_backend': binding.runtime.backend if binding else model_http_backend(),
+                                     'read_timeout': settings['timeout'], **runtime_bindings.metadata(bundle, 'planning'),
+                                     **({'resumed_from_task_id': previous['id']} if previous else {})})
         if not task.get('_reused'):
             background_tasks.add_task(run_planning, task['id'], goal, settings, today)
         return {'task_id': task['id'], 'reused': bool(task.get('_reused'))}
+    except RuntimeUnavailable as exc:
+        raise runtime_bindings.unavailable(exc) from None
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from None
     except (sqlite3.Error, OSError):
@@ -152,11 +199,33 @@ def save_plan(plan_id: str, body: PlanUpdate):
             if result['revision'] != body.expected_revision:
                 raise HTTPException(409, detail='计划已在其他页面修改，请重新读取后再保存。')
             plan = validate_research_plan(body.plan, result['goal'], today=date.fromisoformat(result['planning_date']))
+            if result.get('interaction_id'):
+                link_revision(db, result)
             result.update(plan=plan.model_dump(mode='json'), revision=result['revision'] + 1,
                           updated_at=now(), edited_by_user=True, capabilities=planning_capabilities())
+            if result.get('interaction_id'):
+                result['plan_snapshot_id'] = provenance.freeze_plan(result)
+                link_revision(db, result)
             db.execute('UPDATE research_plans SET payload=? WHERE id=?', (json.dumps(result, ensure_ascii=False), plan_id))
         return result
+    except RuntimeUnavailable as exc:
+        raise runtime_bindings.unavailable(exc) from None
     except ResearchPlanningError as exc:
         raise HTTPException(422, detail=str(exc)) from None
     except (sqlite3.Error, OSError):
         raise HTTPException(503, detail='暂时无法保存研究计划。') from None
+
+
+@router.get('/{plan_id}/revisions/{revision}')
+def get_plan_revision(plan_id: str, revision: int):
+    get_plan(plan_id)
+    try:
+        with connection() as db:
+            initialize(db)
+            row = db.execute('SELECT snapshot_id FROM research_plan_revision_links WHERE plan_id=? AND revision=?',
+                             (plan_id, revision)).fetchone()
+        if not row:
+            raise RuntimeUnavailable('这项历史修订未记录版本快照，不能用当前计划回填。')
+        return provenance.load_plan_revision(row[0])
+    except RuntimeUnavailable as exc:
+        raise runtime_bindings.unavailable(exc) from None

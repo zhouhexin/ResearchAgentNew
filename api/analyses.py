@@ -23,6 +23,9 @@ from agent.batch_analysis import BatchAnalysisFailed, analyze_batches, plan_fing
 from agent.paper_context import assert_document_unchanged, load_paper_context, verify_paper_context as verify_context, DocumentChangedError
 from api.analysis_results import complete_analysis, load_result, load_results, with_current_state
 from api import tasks
+from api import analysis_runtime
+from api import runtime_bindings, provenance
+from agent.runtime_snapshot import RuntimeUnavailable, fingerprint as content_fingerprint
 from api.tasks import create_task, update_task, get_task, connection
 from storage.analysis_batches import AnalysisBatchStore
 from storage.pdf_reparse import ensure_pdf_reading_order
@@ -43,6 +46,7 @@ class AnalysisRequest(BaseModel):
     batch_size: int = Field(default=2, ge=1, le=10)
     force_restart: bool = False
     resume_task_id: str | None = None
+    expected_context_sha256: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
 
 
 
@@ -77,9 +81,12 @@ def batch_settings():
     return max_chars, retries
 
 
-def run_analysis(task_id, context, settings, batches=None, run_key=None, fingerprint=None):
+@runtime_bindings.task_worker
+def run_analysis(task_id, context, settings, batches=None, run_key=None, fingerprint=None, binding=None):
     engine = None
     try:
+        if binding:
+            analysis_runtime.assert_binding(*binding)
         batches = batches or split_context(context, settings.get('batch_size', 2), settings.get('batch_max_chars', 4000))
         store = AnalysisBatchStore(tasks.TASK_DB_PATH)
         store.prepare(run_key, fingerprint, batches)
@@ -88,6 +95,8 @@ def run_analysis(task_id, context, settings, batches=None, run_key=None, fingerp
                     total_batches=len(batches), completed_batches=0, current_batch=1)
         engine, Session = make_db(os.environ['DATABASE_URL'])
         def check(batch):
+            if binding:
+                analysis_runtime.assert_binding(*binding)
             with Session.begin() as session:
                 verify_context(session, batch)
         check(context)
@@ -107,7 +116,8 @@ def run_analysis(task_id, context, settings, batches=None, run_key=None, fingerp
                         completed_batches=completed, total_batches=total,
                         batch_attempt=event['attempt'], resumed_batches=event['resumed'], retry_delay_seconds=delay)
         analysis, summary = analyze_batches(context, batches, run_key=run_key, store=store,
-            llm_factory=analysis_llm, read_timeout=settings['timeout'], method=settings['method'],
+            llm_factory=analysis_runtime.model_factory(binding) if binding else analysis_llm,
+            read_timeout=settings['timeout'], method=settings['method'],
             batch_retries=settings.get('batch_retries', 1), check_context=check, save_batch=save, progress=progress)
         update_task(task_id, progress=95, stage='各批次均已保存，正在合并并检查完整报告')
         try:
@@ -116,7 +126,12 @@ def run_analysis(task_id, context, settings, batches=None, run_key=None, fingerp
             raise DocumentChangedError() from None
         payload = export_analysis(analysis, context)
         payload['selected_evidence_ids'] = list(context.sources)
-        payload['model_name'] = model_name()
+        payload['model_name'] = binding[1].model if binding else model_name()
+        if binding:
+            analysis_runtime.assert_binding(*binding)
+            payload.update(agent_version_id=binding[0].id, runtime_snapshot_id=binding[1].id,
+                           source_task_id=task_id)
+        payload.update(provenance.fields(get_task(task_id)))
         payload['batch_summary'] = dict(summary, batch_size=settings.get('batch_size', 2), scope=settings.get('scope', 'full'))
         payload['document']['source_url'] = safe_source(payload['document']['source_url'])
         for evidence in payload['evidence_index'].values():
@@ -129,7 +144,9 @@ def run_analysis(task_id, context, settings, batches=None, run_key=None, fingerp
         failed_batch = exc.index if isinstance(exc, BatchAnalysisFailed) else None
         if isinstance(exc, BatchAnalysisFailed):
             exc = exc.cause
-        if isinstance(exc, CodexExecutionError):
+        if isinstance(exc, RuntimeUnavailable):
+            code, message = exc.code, str(exc)
+        elif isinstance(exc, CodexExecutionError):
             code, message, diagnostic = exc.code, str(exc), exc.diagnostic
         elif isinstance(exc, APITimeoutError):
             diagnostic = model_timeout_diagnostic(exc, settings['timeout'])
@@ -170,7 +187,7 @@ def run_analysis(task_id, context, settings, batches=None, run_key=None, fingerp
                                          for issue in exc.diagnostics.get('issues', [])]}
         logger.warning('论文分析失败：task=%s error_type=%s code=%s diagnostic=%s', task_id, type(exc).__name__, code, log_diagnostic)
         try:
-            update_task(task_id, status='failed', failed_batch=failed_batch, stage=(f'第 {failed_batch} 批失败；已完成批次已保存' if failed_batch else '论文分析失败；已核验批次保留'), error={'code': code, 'message': message, 'retryable': exc.retryable if isinstance(exc, CodexExecutionError) else True, **({'diagnostic': diagnostic} if diagnostic else {})})
+            update_task(task_id, status='failed', failed_batch=failed_batch, stage=(f'第 {failed_batch} 批失败；已完成批次已保存' if failed_batch else '论文分析失败；已核验批次保留'), error={'code': code, 'message': message, 'retryable': False if isinstance(exc, RuntimeUnavailable) else exc.retryable if isinstance(exc, CodexExecutionError) else True, **({'diagnostic': diagnostic} if diagnostic else {})})
         except (sqlite3.Error, OSError):
             logger.error('无法保存分析任务失败状态：task=%s', task_id)
     finally:
@@ -182,8 +199,38 @@ def run_analysis(task_id, context, settings, batches=None, run_key=None, fingerp
 def start_analysis(body: AnalysisRequest, background_tasks: BackgroundTasks):
     try:
         paper_exists(body.paper_id)
-        settings = model_settings()
-        max_chars, batch_retries = batch_settings()
+        old, binding, bundle = None, None, None
+        if body.resume_task_id:
+            old = get_task(body.resume_task_id)
+            if body.force_restart or old.get('type') != 'paper_analysis' or old.get('paper_id') != body.paper_id:
+                raise HTTPException(422, detail='不能继续这项任务，请选择对应论文。')
+        if old and old.get('runtime_snapshot_id'):
+            # 即使开关或环境默认值已切换，续跑仍绑定原运行版本。
+            binding = analysis_runtime.restore_binding(old, database_url=os.environ['DATABASE_URL'], db_factory=make_db)
+            bundle = old.get('runtime_bindings')
+            tools = json.loads(binding[0].tools_json)
+            settings = tools['settings']
+            body = body.model_copy(update=tools['request'])
+            max_chars, batch_retries = settings['batch_max_chars'], settings['batch_retries']
+        else:
+            inherited = tasks.CURRENT_TASK.get()
+            bundle = runtime_bindings.bundle_for(inherited)
+            role = runtime_bindings.restore(bundle, 'analysis') if bundle else None
+            if role:
+                settings = dict(role.settings)
+                max_chars, batch_retries = settings['batch_max_chars'], settings['batch_retries']
+                # 角色运行版本复用根任务配置，阅读选择作为子任务的固定配置另存。
+                from agent.runtime_snapshot import canonical
+                tools = json.loads(role.version.tools_json)
+                tools.update(settings=dict(settings, scope=body.scope, batch_size=body.batch_size),
+                             request={key: getattr(body, key) for key in ('scope', 'max_chunks', 'fast_max_chunks', 'batch_size')})
+                version = role.version.model_copy(update={'tools_json': canonical(tools)})
+                from storage.runtime_versions import save_immutable
+                provenance.transaction(lambda session: save_immutable(session, version))
+                binding = (version, role.runtime)
+            else:
+                settings = model_settings()
+                max_chars, batch_retries = batch_settings()
         with connection() as db:
             for row in db.execute('SELECT payload FROM tasks'):
                 active = json.loads(row[0])
@@ -193,7 +240,8 @@ def start_analysis(body: AnalysisRequest, background_tasks: BackgroundTasks):
                     if body.scope=='fast' and active.get('requested_max_chunks')!=body.fast_max_chunks:
                         raise HTTPException(409,detail='该论文已有不同片段预算的快速阅读任务正在运行。')
                     return {'task_id': active['id'], 'reused': True}
-        reparsed = ensure_pdf_reading_order(os.environ['DATABASE_URL'], body.paper_id, db_factory=make_db)
+        # 文献库执行已固定原文，不在子任务入队时自动替换为新的解析版本。
+        reparsed = None if body.expected_context_sha256 else ensure_pdf_reading_order(os.environ['DATABASE_URL'], body.paper_id, db_factory=make_db)
         if reparsed:
             logger.info('分析前已更新 PDF 解析与分片：paper=%s document=%s chunks=%s→%s',
                         body.paper_id, reparsed['document_id'], reparsed['previous_chunks'], reparsed['total_chunks'])
@@ -202,15 +250,25 @@ def start_analysis(body: AnalysisRequest, background_tasks: BackgroundTasks):
         else:
             context = load_paper_context(os.environ['DATABASE_URL'], body.paper_id,
                                          max_chunks=None if body.scope == 'full' else body.max_chunks)
+        if body.expected_context_sha256:
+            from agent.context_identity import context_identity
+            if context_identity(context) != body.expected_context_sha256:
+                raise RuntimeUnavailable('文献库选定的阅读材料已变化，请新建本轮执行。')
         batches = split_context(context, body.batch_size, max_chars)
-        fingerprint = plan_fingerprint(context, batches, model=model_name(),
-            base_url=model_endpoint(), method=settings['method'], scope=body.scope,
+        settings.update(batch_size=body.batch_size, batch_max_chars=max_chars, batch_retries=batch_retries, scope=body.scope)
+        if binding is None and analysis_runtime.enabled():
+            if old:
+                raise HTTPException(409, detail='历史任务未固定运行配置。请重新开始分析以建立新快照；原批次保留。')
+            binding = analysis_runtime.capture_binding(settings,
+                {key: getattr(body, key) for key in ('scope', 'max_chunks', 'fast_max_chunks', 'batch_size')},
+                database_url=os.environ['DATABASE_URL'], db_factory=make_db)
+        fingerprint = plan_fingerprint(context, batches, model=binding[1].model if binding else model_name(),
+            base_url=binding[1].endpoint if binding else model_endpoint(), method=settings['method'], scope=body.scope,
             batch_size=body.batch_size, max_chars=max_chars)
+        if binding:
+            fingerprint = content_fingerprint({'plan': fingerprint, 'version': binding[0].id, 'runtime': binding[1].id})
         store = AnalysisBatchStore(tasks.TASK_DB_PATH)
         if body.resume_task_id:
-            old = get_task(body.resume_task_id)
-            if body.force_restart or old.get('type') != 'paper_analysis' or old.get('paper_id') != body.paper_id:
-                raise HTTPException(422, detail='不能继续这项任务，请选择对应论文。')
             if old.get('plan_fingerprint') != fingerprint:
                 if not reparsed:
                     raise HTTPException(409, detail='原文、模型或分批设置已改变，旧进度不能混用。请重新开始分析。')
@@ -221,19 +279,26 @@ def start_analysis(body: AnalysisRequest, background_tasks: BackgroundTasks):
             run_key = fingerprint + '_' + uuid4().hex
         else:
             run_key = store.latest_run(fingerprint) or fingerprint
-        settings.update(batch_size=body.batch_size, batch_max_chars=max_chars, batch_retries=batch_retries, scope=body.scope)
         task = create_task(body.paper_id, task_type='paper_analysis', stage='等待分批分析', deduplicate=True,
-            metadata={'batch_run_key': run_key, 'plan_fingerprint': fingerprint, 'analysis_scope': body.scope,
+            metadata={**(provenance.fields(old) if old else {}), 'batch_run_key': run_key, 'plan_fingerprint': fingerprint, 'analysis_scope': body.scope,
                       'batch_size': body.batch_size, 'requested_max_chunks': body.fast_max_chunks if body.scope=='fast' else body.max_chunks,
                       **({'reading_selection':context.reading_selection} if context.reading_selection else {}),
                       'total_batches': len(batches), 'completed_batches': 0, 'selected_chunks': len(context.sources),
                       'total_chunks': context.total_chunks, 'batch_retries': batch_retries,
-                      'model_name': model_name(), 'http_backend': model_http_backend(), 'read_timeout': settings['timeout'],
+                      'model_name': binding[1].model if binding else model_name(),
+                      'http_backend': binding[1].backend if binding else model_http_backend(), 'read_timeout': settings['timeout'],
+                      **({'agent_version_id': binding[0].id, 'runtime_snapshot_id': binding[1].id,
+                          'resumed_from_task_id': old['id'] if old else None,
+                          'token_usage': None, 'cost': None} if binding else {}),
+                      **({'runtime_bindings': bundle} if bundle else {}),
                       **({'source_reparsed': reparsed} if reparsed else {})})
         if not task.get('_reused'):
-            background_tasks.add_task(run_analysis, task['id'], context, settings, batches, run_key, fingerprint)
+            background_tasks.add_task(run_analysis, task['id'], context, settings, batches, run_key, fingerprint, binding)
         return {'task_id': task['id'], 'reused': bool(task.get('_reused')),
                 **({'source_reparsed': True} if reparsed else {})}
+    except RuntimeUnavailable as exc:
+        raise HTTPException(503 if isinstance(exc, analysis_runtime.RuntimeStorageUnavailable) else 409,
+                            detail={'code': exc.code, 'message': str(exc), 'retryable': False}) from None
     except SQLAlchemyError:
         raise HTTPException(503, detail='暂时无法读取论文原文，请检查数据库。') from None
     except ValueError as exc:

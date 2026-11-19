@@ -8,7 +8,7 @@ import EvidenceCitation from './EvidenceCitation.vue'
 import TaskProgress from './TaskProgress.vue'
 
 const props=defineProps<{paperIds:number[];analysisIds:string[];modelValue:string;disabled?:boolean;restoreTaskId?:string}>()
-const emit=defineEmits<{(e:'update:modelValue',value:string):void}>()
+const emit=defineEmits<{(e:'update:modelValue',value:string):void;(e:'sourceTask',value:string):void}>()
 const store=useTaskStore(),taskId=ref(''),submitting=ref(false),error=ref('')
 const selection=computed(()=>JSON.stringify(props.paperIds.map((id,i)=>[id,props.analysisIds[i]]).sort((a,b)=>Number(a[0])-Number(b[0]))))
 const storageKey=computed(()=>`rp-review-questions-${mode()}-${selection.value}`)
@@ -56,6 +56,7 @@ async function restore(){
  await recommend()
 }
 watch(()=>props.modelValue,persist)
+watch(()=>[task.value?.id,task.value?.status],()=>emit('sourceTask',task.value?.status==='succeeded'?task.value.id:''),{immediate:true})
 onMounted(()=>{watch([selection,()=>props.restoreTaskId],restore,{immediate:true})})
 onBeforeUnmount(()=>{version++})
 </script>

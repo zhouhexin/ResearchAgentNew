@@ -12,6 +12,7 @@ import unicodedata
 from urllib.parse import urljoin, urlsplit
 
 import requests
+from tools.execution_config import openalex_key, source_ids
 
 from storage.repository import normalize_doi, normalize_openalex_id
 from tools.academic_search import restore_abstract
@@ -45,8 +46,8 @@ def cached_get(url, params=None, *, ttl=86400):
         pause = max(0, 1.0 - (time.monotonic()-_LAST.get(parsed.hostname, 0)))
         if pause:
             time.sleep(pause)
-        if parsed.hostname == 'api.openalex.org' and os.getenv('OPENALEX_API_KEY'):
-            safe_params['api_key'] = os.environ['OPENALEX_API_KEY']
+        if parsed.hostname == 'api.openalex.org' and (key_value := openalex_key()):
+            safe_params['api_key'] = key_value
         try:
             with requests.get(url, params=safe_params, timeout=(10, 30), stream=True, allow_redirects=False,
                               headers={'User-Agent': 'ResearchPilot/0.1 (official proceedings lookup)'}) as response:
@@ -102,7 +103,7 @@ def resolve_sources(venue_slug='cvpr'):
     acronym = VENUES[venue_slug]['acronym']
     env_name = f'OPENALEX_{acronym.upper()}_SOURCE_IDS'
     # 不内置猜测的 S 编号。配置 ID 也必须从 OpenAlex 读取身份后核对。
-    configured = [v.strip() for v in os.getenv(env_name, '').split(',') if v.strip()]
+    configured = [v.strip() for v in source_ids(env_name).split(',') if v.strip()]
     if configured and (len(configured) > 100 or any(not re.fullmatch(r'S\d+', value) for value in configured)):
         raise FulltextError(f'{acronym}_MAPPING_INVALID', f'{env_name} 应为逗号分隔的 OpenAlex S 编号，最多100个。')
     results = [get_json('sources/'+value, {}) for value in configured] if configured else get_json('sources', {

@@ -44,7 +44,7 @@ def author_keys(value):
     return ''.join(c for c in text if c.isalnum())
 
 
-def query_arxiv(params):
+def query_arxiv(params, *, deadline=None):
     global _last_query
     # arXiv 要求请求之间留出间隔；所有本地查询共享节流锁。
     with _QUERY_LOCK:
@@ -52,7 +52,13 @@ def query_arxiv(params):
         if pause:
             time.sleep(pause)
         try:
-            with requests.get(ARXIV_API, params=params, timeout=(10, 30),
+            timeout = (10, 30)
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise requests.Timeout("arXiv request deadline exceeded before dispatch")
+                timeout = (min(10, remaining), min(30, remaining))
+            with requests.get(ARXIV_API, params=params, timeout=timeout,
                               headers={'User-Agent': 'ResearchPilot/0.1 (arXiv metadata lookup)'}) as response:
                 response.raise_for_status()
                 return response.content

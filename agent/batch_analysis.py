@@ -94,7 +94,7 @@ def retry_delay(exc, attempt):
 
 
 def analyze_batches(context, batches, *, run_key, store, llm_factory, read_timeout, method,
-                    batch_retries=1, check_context=None, save_batch=None, progress=None):
+                    batch_retries=1, check_context=None, save_batch=None, progress=None, research_focus=None):
     if not 0 <= batch_retries <= 3:
         raise ValueError('每批额外重试次数须为 0–3。')
     progress = progress or (lambda **kwargs: None)
@@ -121,7 +121,8 @@ def analyze_batches(context, batches, *, run_key, store, llm_factory, read_timeo
             try:
                 # SDK 不再叠加重试；每批的尝试次数由本层统一控制。
                 with llm_factory(read_timeout=read_timeout, retries=0, trust_env=True) as llm:
-                    analysis = analyze_paper(llm, batch, method=method, max_repair_attempts=0, retry_feedback=feedback,allow_quote_selection=True)
+                    focus = {'research_focus': research_focus} if research_focus is not None else {}
+                    analysis = analyze_paper(llm, batch, method=method, max_repair_attempts=0, retry_feedback=feedback,allow_quote_selection=True, **focus)
                 if save_batch:
                     save_batch(batch, index, analysis)
                 else:

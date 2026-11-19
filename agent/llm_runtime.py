@@ -71,20 +71,44 @@ def model_request_options():
 
 
 @contextmanager
-def analysis_llm(*, read_timeout: float, retries: int, trust_env: bool, http_backend=None, max_output_tokens=None):
+def analysis_llm(*, read_timeout=None, retries=None, trust_env=None, http_backend=None, max_output_tokens=None,
+                 runtime_snapshot=None):
+    """显式快照优先；旧调用保持兼容，快照调用不再读取模型默认配置。"""
+    if runtime_snapshot is not None:
+        from agent.runtime_snapshot import resolve_runtime
+        snapshot, api_key = resolve_runtime(runtime_snapshot)
+        read_timeout, retries, trust_env = snapshot.read_timeout, snapshot.retries, snapshot.trust_env
+        provider, backend = snapshot.provider, snapshot.backend
+        model, endpoint = snapshot.model, snapshot.endpoint
+        options = {}
+        if snapshot.enable_thinking is not None:
+            options['extra_body'] = {'enable_thinking': snapshot.enable_thinking}
+        if snapshot.max_output_tokens is not None:
+            options['max_tokens'] = snapshot.max_output_tokens
+    else:
+        provider = model_provider()
+        backend = model_http_backend(http_backend)
+        model, endpoint, api_key = os.getenv('LLM_MODEL'), os.getenv('LLM_BASE_URL') or None, os.getenv('LLM_API_KEY')
+        options = model_request_options()
+        if max_output_tokens is not None:
+            options['max_tokens'] = max_output_tokens
+    if read_timeout is None or retries is None or trust_env is None:
+        raise ValueError('请提供超时、重试和代理设置，或提供运行快照。')
     if not math.isfinite(read_timeout) or read_timeout <= 0 or retries < 0:
         raise ValueError("超时必须为正数，重试次数不能为负数")
     if max_output_tokens is not None and (isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int) or max_output_tokens < 1):
         raise ValueError('输出 Token 上限必须为正整数')
-    if model_provider() == 'codex':
+    if provider == 'codex':
         from agent.codex_model import CodexModel, configured_codex_model
-        model_http_backend(http_backend)
-        yield CodexModel(timeout=read_timeout, trust_env=trust_env, model=configured_codex_model())
+        if runtime_snapshot is not None:
+            yield CodexModel(timeout=read_timeout, trust_env=trust_env, model=snapshot.model,
+                             executable=snapshot.codex_executable, system_proxy=snapshot.codex_system_proxy,
+                             runtime_validator=lambda: resolve_runtime(snapshot))
+        else:
+            yield CodexModel(timeout=read_timeout, trust_env=trust_env, model=configured_codex_model())
         return
-    for key in ("LLM_MODEL", "LLM_API_KEY"):
-        if not os.getenv(key):
-            raise ValueError(f"请在 .env 中配置 {key}")
-    backend = model_http_backend(http_backend)
+    if not model or not api_key:
+        raise ValueError('请在 .env 中配置 LLM_MODEL 和 LLM_API_KEY')
     network_trace = {'backend': backend}
 
     def trace(event, info):
@@ -97,6 +121,8 @@ def analysis_llm(*, read_timeout: float, retries: int, trust_env: bool, http_bac
                     network_trace.update(peer_ip=peer[0], peer_port=peer[1])
 
     def request_hook(request):
+        if runtime_snapshot is not None:
+            resolve_runtime(snapshot)
         network_trace.clear()
         network_trace['backend'] = backend
         request.extensions['trace'] = trace
@@ -110,15 +136,12 @@ def analysis_llm(*, read_timeout: float, retries: int, trust_env: bool, http_bac
         client.timeout.connect = min(10.0, read_timeout)
         client.timeout.write = min(30.0, read_timeout)
         client.timeout.pool = min(10.0, read_timeout)
-        options = model_request_options()
-        if max_output_tokens is not None:
-            options['max_tokens'] = max_output_tokens
         if not trust_env:
             options['openai_proxy'] = ''
         llm = ChatOpenAI(
-            model=os.environ["LLM_MODEL"],
-            api_key=os.environ["LLM_API_KEY"],
-            base_url=os.getenv("LLM_BASE_URL") or None,
+            model=model,
+            api_key=api_key,
+            base_url=endpoint,
             http_client=client,
             timeout=client.timeout,
             max_retries=retries,

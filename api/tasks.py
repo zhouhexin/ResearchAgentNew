@@ -2,6 +2,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -11,6 +12,16 @@ from fastapi import APIRouter, HTTPException, Query
 
 TASK_DB_PATH = Path(__file__).resolve().parents[1] / 'outputs' / 'api_tasks.sqlite3'
 router = APIRouter(prefix='/api/v1/tasks', tags=['任务'])
+CURRENT_TASK = ContextVar('research_parent_task', default=None)
+
+
+@contextmanager
+def task_scope(task_id):
+    token = CURRENT_TASK.set(get_task(task_id))
+    try:
+        yield
+    finally:
+        CURRENT_TASK.reset(token)
 
 
 def now():
@@ -46,6 +57,8 @@ def create_task(paper_id=None, *, task_type='document_parse', stage='PDF 已上�
                 existing = json.loads(row[0])
                 if existing.get('paper_id') == paper_id and existing['type'] == task_type and existing['status'] in {'queued', 'running'} and (dedup_key is None or existing.get('dedup_key') == dedup_key):
                     return dict(existing, _reused=True)
+        from api.provenance import decorate
+        task = decorate(task)
         db.execute('INSERT INTO tasks VALUES (?, ?)', (task['id'], json.dumps(task, ensure_ascii=False)))
     return task
 
@@ -57,9 +70,60 @@ def update_task(task_id, **changes):
         if row is None:
             raise ValueError('任务不存在')
         task = json.loads(row[0])
+        if task.get('interaction_id'):
+            if changes.get('status') == 'running' and not task.get('started_at'):
+                changes['started_at'] = now()
+            if changes.get('status') in {'succeeded', 'failed', 'cancelled'}:
+                changes['finished_at'] = now()
+                changes['failure_stage'] = task.get('stage') if changes.get('status') == 'failed' else None
         task.update(changes, updated_at=now())
         db.execute('UPDATE tasks SET payload = ? WHERE id = ?', (json.dumps(task, ensure_ascii=False), task_id))
     return task
+
+
+@router.get('/{task_id}/trace')
+def task_trace(task_id: str):
+    """只展示已记录的业务关联；历史没有采集的字段保持未知。"""
+    task = get_task(task_id)
+    interaction_id = task.get('interaction_id')
+    if not interaction_id:
+        return {'provenance_state': 'legacy_unknown', 'interaction': None, 'tasks': [task],
+                'artifacts': [], 'edges': [], 'plan_revisions': []}
+    from api import provenance
+    from api.runtime_bindings import unavailable
+    from agent.runtime_snapshot import RuntimeUnavailable
+    from storage.research_provenance import InteractionRecord
+    try:
+        def read_interaction(session):
+            record = session.get(InteractionRecord, interaction_id)
+            return record.payload if record else None
+        interaction = provenance.transaction(read_interaction)
+        if interaction is None:
+            raise RuntimeUnavailable('交互记录不存在。')
+        with connection() as db:
+            related = [json.loads(row[0]) for row in db.execute('SELECT payload FROM tasks')]
+        related = [value for value in related if value.get('interaction_id') == interaction_id]
+        revisions = sorted({value['plan_snapshot_id'] for value in related if value.get('plan_snapshot_id')})
+        artifacts = []
+        for value in related:
+            value['cancel_supported'] = False
+            start, end = value.get('started_at'), value.get('finished_at') or value.get('updated_at')
+            value['elapsed_seconds'] = (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds() if start and value['status'] in {'succeeded', 'failed', 'cancelled'} else None
+            if value.get('result_id'):
+                artifacts.append({'task_id': value['id'], 'kind': value['type'], 'id': value['result_id'], 'relation': 'output'})
+            if value.get('question_suggestions'):
+                artifacts.append({'task_id': value['id'], 'kind': 'question_suggestions', 'id': value['id'], 'relation': 'output'})
+            artifacts.extend(dict(artifact, task_id=value['id']) for artifact in value.get('execution_artifacts', []))
+            artifacts.extend({'task_id': value['id'], 'kind': 'analysis', 'id': key, 'relation': 'input'}
+                             for key in value.get('analysis_ids', []))
+        return {'provenance_state': 'recorded', 'interaction': interaction,
+                'tasks': sorted(related, key=lambda item: item['created_at']),
+                'artifacts': artifacts,
+                'edges': [{'parent_task_id': value.get('parent_task_id'), 'child_task_id': value['id'],
+                           'resumed_from_task_id': value.get('resumed_from_task_id')} for value in related],
+                'plan_revisions': [provenance.load_plan_revision(key) for key in revisions]}
+    except RuntimeUnavailable as exc:
+        raise unavailable(exc) from None
 
 
 def recover_interrupted_tasks():
