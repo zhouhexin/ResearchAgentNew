@@ -7,11 +7,12 @@ const props=defineProps<{execution:ResearchExecution}>()
 const labels={source_quotes:'原文引句与来源',semantic_judgments:'结论及覆盖判断',pdf_navigation:'PDF页码跳转',export_files:'文件实际下载与内容'}
 const checks={execution_completed:'执行完成状态',analysis_sources:'分析与原文',runtime_replay_available:'当前运行版本可恢复性',associated_reviews:'已关联评审',coverage:'所选覆盖报告',report:'所选综述'}
 const statuses={passed:'核验通过',failed:'核验未通过',not_selected:'未选择、未验证'}
+const reportReviewId=ref(''),reportReplayId=ref('')
 const coverageId=ref(''),reportId=ref(''),reviewer=ref(''),busy=ref(false),error=ref(''),inspection=ref<Inspection|null>(null),saved=ref<Acceptance|null>(null)
 const manual=ref(Object.keys(labels).map(key=>({key,verdict:'not_checked',reason:''})))
 const coverages=ref<{id:string;label:string}[]>([]),reports=ref<{id:string;label:string}[]>([]),history=ref<{id:string;created_at:string;reviewer:string}[]>([])
 let epoch=0
-function selection(){return {...(coverageId.value?{coverage_id:coverageId.value}:{}),...(reportId.value?{report_id:reportId.value}:{})}}
+function selection(){return {...(coverageId.value?{coverage_id:coverageId.value}:{}),...(reportId.value?{report_id:reportId.value}:{}),...(reportReviewId.value?{report_review_id:reportReviewId.value}:{}),...(reportReplayId.value?{report_replay_id:reportReplayId.value}:{})}}
 async function refresh(){
  if(mode()==='demo'||busy.value)return
  const version=epoch;busy.value=true;error.value=''
@@ -39,6 +40,8 @@ async function save(){
 }
 async function open(id:string){const version=epoch;busy.value=true;error.value='';try{const result=await api.acceptance(id);if(version===epoch)saved.value=result}catch(e){if(version===epoch)error.value=(e as Error).message}finally{if(version===epoch)busy.value=false}}
 watch(()=>[coverageId.value,reportId.value],()=>{inspection.value=null;saved.value=null;manual.value=Object.keys(labels).map(key=>({key,verdict:'not_checked',reason:''}))})
+watch(reportId,()=>{reportReviewId.value='';reportReplayId.value=''})
+watch(()=>[reportReviewId.value,reportReplayId.value],()=>{inspection.value=null;saved.value=null})
 watch(()=>props.execution.id,()=>{epoch++;coverageId.value='';reportId.value='';reviewer.value='';inspection.value=null;saved.value=null;coverages.value=[];reports.value=[];history.value=[];error.value='';busy.value=false;manual.value=Object.keys(labels).map(key=>({key,verdict:'not_checked',reason:''}))})
 onBeforeUnmount(()=>{epoch++})
 </script>
@@ -48,6 +51,7 @@ onBeforeUnmount(()=>{epoch++})
   <el-button :disabled="busy||mode()==='demo'" @click="refresh">加载可验收产物及历史</el-button>
   <div class="acceptance-grid"><label>覆盖报告<select :value="coverageId" :disabled="busy" @change="coverageId=($event.target as HTMLSelectElement).value"><option value="">不选择，保持未验证</option><option v-for="c in coverages" :key="c.id" :value="c.id">{{c.label}}</option></select></label><label>综述<select :value="reportId" :disabled="busy" @change="reportId=($event.target as HTMLSelectElement).value"><option value="">不选择，保持未验证</option><option v-for="r in reports" :key="r.id" :value="r.id">{{r.label}}</option></select></label></div>
   <el-button :disabled="busy||mode()==='demo'" @click="inspect">检查当前材料与关联</el-button>
+  <div v-if="reportId"><label>独立综述审查结果编号（从报告检查结果复制）<input v-model="reportReviewId" :disabled="busy" maxlength="100"/></label><label>原协议回放结果编号<input v-model="reportReplayId" :disabled="busy" maxlength="100"/></label></div>
   <template v-if="inspection"><p v-for="c in inspection.checks" :key="c.key">{{checks[c.key as keyof typeof checks]||c.key}} · {{statuses[c.status]}} · {{c.detail}}</p><p>未关联评审的分析：{{inspection.missing_review_analysis_ids.join('、')||'无'}}。已关联不等于人工确认。</p>
    <p v-for="a in inspection.artifacts" :key="a.id">{{a.kind}} · {{a.id}}<span v-if="a.paper_id"> · {{a.scope}} · 阅读 {{a.selected_chunks}}/{{a.total_chunks}} 片段</span></p>
    <label>复核人（自述，未认证）<input :value="reviewer" maxlength="100" :disabled="busy" @input="reviewer=($event.target as HTMLInputElement).value"/></label>

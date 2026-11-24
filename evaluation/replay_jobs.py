@@ -41,7 +41,10 @@ def prepare(spec):
     permission_check(spec.dataset_artifact_id,dataset)
     if spec.split=='holdout' and not spec.holdout_authorized:raise RuntimeUnavailable('留出回放未显式授权。')
     if not any(c.split==spec.split for c in dataset.cases):raise RuntimeUnavailable('集合为空。')
-    restore(binding)
+    version,_=restore(binding)
+    from evaluation.report_protocol import check_binding
+    for case in dataset.cases:
+        if case.split==spec.split:check_binding(case,version)
     identifier=put('task_replay_job',spec.model_dump())
     return identifier,dataset,binding
 

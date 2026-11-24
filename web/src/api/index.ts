@@ -10,6 +10,10 @@ import type {AnalysisResult,DocumentSummary,EvidenceRecord,Health,PageResult,Pap
 export const mode=()=>localStorage.getItem('rp-data-mode')||import.meta.env.VITE_DATA_MODE||'demo'
 async function request<T>(method:string,path:string,data?:unknown,params?:Record<string,unknown>):Promise<T>{const cleanedParams=cleanParams(params);if(mode()==='demo')return demoRequest<T>(method,path,data,cleanedParams);return(await http.request<T>({method,url:path,data,params:cleanedParams,...(data instanceof FormData?{timeout:120000}:path.startsWith('/venues/')?{timeout:240000}:path==='/agent/chat'?{timeout:600000}:{})})).data}
 export const api={
+ reportChecks:(id:string)=>request<{items:import('../types/report-check').ReportCheckTask[]}>('GET',`/reviews/${encodeURIComponent(id)}/checks`),
+ reportCheck:(id:string,result:string)=>request<import('../types/report-check').ReportCheckResult>('GET',`/reviews/${encodeURIComponent(id)}/checks/${encodeURIComponent(result)}`),
+ startReportCheck:(id:string,kind:import('../types/report-check').CheckKind,resume_request_id?:string,budget?:{max_calls:number;total_seconds:number})=>request<{task_id:string;request_id:string}>('POST',`/reviews/${encodeURIComponent(id)}/checks`,{kind,...budget,...(resume_request_id?{resume_request_id}:{})}),
+ handoffReport:(id:string,body:Record<string,unknown>)=>request<{artifact_id:string;issues:unknown[]}>('POST',`/evaluation/reports/${encodeURIComponent(id)}/handoff`,body),
  claimReviews:(id:string)=>request<{items:ClaimReviewRecord[]}>('GET',`/analyses/${encodeURIComponent(id)}/claim-reviews`),
  claimReview:(id:string)=>request<ClaimReviewRecord>('GET',`/claim-reviews/${encodeURIComponent(id)}`),
  startClaimReview:(id:string,resume_review_id?:string,new_run=false)=>request<{task_id:string;review_id:string;reused:boolean}>('POST',`/analyses/${encodeURIComponent(id)}/claim-reviews`,undefined,{resume_review_id,...(new_run?{new_run:true}:{})}),
@@ -56,7 +60,7 @@ export const api={
  evaluationAction:(action:string,content:Record<string,unknown>)=>request<Record<string,unknown>>('POST',`/evaluation/${action}`,{content}),
  evaluationExecute:(job_id:string)=>request<{task_id:string;job_id:string}>('POST','/evaluation/execute',{job_id,confirm_model_calls:true}),
  evaluationArtifact:(id:string)=>request<Record<string,unknown>>('GET',`/evaluation/artifacts/${encodeURIComponent(id)}`),
- inspectAcceptance:(plan:string,execution:string,body:{coverage_id?:string;report_id?:string})=>request<import('../types/acceptance').Inspection>('POST',`/agent/plans/${encodeURIComponent(plan)}/executions/${encodeURIComponent(execution)}/acceptance/inspect`,body),
+ inspectAcceptance:(plan:string,execution:string,body:{coverage_id?:string;report_id?:string;report_review_id?:string;report_replay_id?:string})=>request<import('../types/acceptance').Inspection>('POST',`/agent/plans/${encodeURIComponent(plan)}/executions/${encodeURIComponent(execution)}/acceptance/inspect`,body),
  saveAcceptance:(plan:string,execution:string,body:Record<string,unknown>)=>request<import('../types/acceptance').Acceptance>('POST',`/agent/plans/${encodeURIComponent(plan)}/executions/${encodeURIComponent(execution)}/acceptance`,body),
  acceptanceHistory:(plan:string,execution:string)=>request<{items:{id:string;created_at:string;reviewer:string}[]}>('GET',`/agent/plans/${encodeURIComponent(plan)}/executions/${encodeURIComponent(execution)}/acceptance`),
  acceptance:(id:string)=>request<import('../types/acceptance').Acceptance>('GET',`/acceptance/${encodeURIComponent(id)}`),

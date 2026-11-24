@@ -62,9 +62,12 @@ class ReplayAnswer(Strict):
 
 def contract():
     from evaluation.harness_contracts import SKILLS
+    from evaluation import report_protocol
+    from review import synthesis
     return {'task_replay':{'prompt':PROMPT,'schema':ReplayAnswer.model_json_schema(),
             'builders':inspect.getsource(payload),'materializer':inspect.getsource(materialize),'dynamic_schema':inspect.getsource(response_schema),
-            'prompt_builder':inspect.getsource(strategy_prompt),'skills':SKILLS}}
+            'prompt_builder':inspect.getsource(strategy_prompt),'skills':SKILLS,
+            'report_protocol':inspect.getsource(report_protocol),'synthesis':inspect.getsource(synthesis)}}
 
 
 def payload(case,strategy):
@@ -132,7 +135,25 @@ def restore(binding):
 
 def execute_case(case,binding,invoke=None,before_invoke=None):
     version,runtime=restore(binding)
+    from evaluation.report_protocol import check_binding
+    check_binding(case, version)
     strategy=Strategy.model_validate(json.loads(version.tools_json)['strategy'])
+    if case.review_request is not None:
+        from evaluation.report_protocol import execution_request, materialize_case
+        system, provided, schema, method = execution_request(case, strategy)
+        if len(canonical(provided)) > strategy.max_input_chars:
+            raise InvalidEvaluation('原综述输入超预算，未截断材料。')
+        if invoke is None:
+            with analysis_llm(runtime_snapshot=runtime) as model:
+                structured=model.with_structured_output(schema,method=method,strict=True if method=='json_schema' else None,include_raw=True)
+                if before_invoke:before_invoke()
+                response=structured.invoke([('system',system),('human',json.dumps(provided,ensure_ascii=False))])
+        else:
+            if before_invoke:before_invoke()
+            response=invoke(provided,runtime)
+        result=materialize_case(response,case)
+        restore(binding)
+        return result
     provided=payload(case,strategy)
     if invoke is None:
         with analysis_llm(runtime_snapshot=runtime) as model:
@@ -161,7 +182,11 @@ def build_run(dataset,binding,outcomes,split,repetitions,run_id):
 def derive_binding(parent,strategy):
     """候选沿用原模型/凭据/网络，只修改获准的数据策略和输出上限。"""
     version,runtime=restore(parent)
-    child_version=AgentVersion.capture(role='analysis',contracts=contract(),tools={'strategy':strategy.model_dump(),'mode':'frozen','parent_agent_version_id':version.id},quote_protocol=version.quote_protocol)
+    tools={'strategy':strategy.model_dump(),'mode':'frozen','parent_agent_version_id':version.id}
+    if version.quote_protocol=='review-synthesis-v1':
+        tools.update({key:value for key,value in json.loads(version.tools_json).items()
+                      if key in {'source_request_sha256','source_agent_version_id'}})
+    child_version=AgentVersion.capture(role='analysis',contracts=contract(),tools=tools,quote_protocol=version.quote_protocol)
     child_runtime=RuntimeSnapshot.model_validate(runtime.model_dump()|{'max_output_tokens':strategy.max_output_tokens if runtime.provider!='codex' else None})
     from api import provenance
     from storage.runtime_versions import save_immutable

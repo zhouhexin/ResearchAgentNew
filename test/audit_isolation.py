@@ -3,7 +3,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def audit_output_isolation(monkeypatch,tmp_path):
-    from api import tasks, uploads, analyses, reviews, claim_reviews
+    from api import tasks, uploads, analyses, reviews, claim_reviews, report_checks
     import agent.runtime_snapshot as runtime
     monkeypatch.setattr(tasks,'TASK_DB_PATH',tmp_path/'audit_tasks.sqlite3')
     monkeypatch.setattr(uploads,'UPLOAD_ROOT',tmp_path/'audit_uploads')
@@ -11,3 +11,4 @@ def audit_output_isolation(monkeypatch,tmp_path):
     monkeypatch.setattr(reviews,'ERROR_DIR',tmp_path/'review_errors')
     monkeypatch.setattr(claim_reviews,'RUN_ROOT',tmp_path/'claim_reviews')
     monkeypatch.setattr(runtime,'IDENTITY_KEY',tmp_path/'runtime_identity.key')
+    monkeypatch.setattr(report_checks,'CHECKPOINTS',tmp_path/'report_checks.sqlite3')

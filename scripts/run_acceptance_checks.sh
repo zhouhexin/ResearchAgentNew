@@ -38,7 +38,7 @@ run_step backend "$python_bin" -m pytest -q test -p test.audit_isolation --tb=sh
 cd "$repo_root/web"
 run_step web_build npm run build
 run_step web_unit npm test
-for script_name in render data questions planning citations claim-review execution-review library-execution coverage reread supplement-search supplement-readings execution-review-links execution-acceptance evaluation-workspace; do
+for script_name in render data questions planning citations claim-review execution-review library-execution coverage reread supplement-search supplement-readings execution-review-links execution-acceptance report-checks evaluation-workspace; do
     run_step "web_$script_name" npm run "test:$script_name"
 done
 printf '隔离自动检查结束。真实PostgreSQL/模型/浏览器/P4-P5管理验收尚需按文档执行。\n' | tee -a "$report_dir/summary.txt"

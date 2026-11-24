@@ -36,6 +36,7 @@ from api.supplement_readings import router as supplement_readings_router
 from api.execution_review_links import router as execution_review_links_router
 from api.execution_acceptance import router as execution_acceptance_router
 from api.evaluation_workspace import router as evaluation_workspace_router
+from api.report_checks import router as report_checks_router
 from api.analyses import model_settings
 from agent.llm_runtime import model_http_backend, model_name
 
@@ -73,6 +74,7 @@ app.include_router(supplement_readings_router)
 app.include_router(execution_review_links_router)
 app.include_router(execution_acceptance_router)
 app.include_router(evaluation_workspace_router)
+app.include_router(report_checks_router)
 
 @app.get("/api/v1/ping")
 def ping():

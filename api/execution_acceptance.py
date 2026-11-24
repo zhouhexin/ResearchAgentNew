@@ -19,6 +19,8 @@ class Selection(BaseModel):
     model_config=ConfigDict(extra='forbid')
     coverage_id:str|None=Field(default=None,max_length=100)
     report_id:str|None=Field(default=None,max_length=100)
+    report_review_id:str|None=Field(default=None,max_length=100)
+    report_replay_id:str|None=Field(default=None,max_length=100)
 
 
 class Attestation(BaseModel):
@@ -84,6 +86,12 @@ def inspect_execution(plan_id,execution_id,selection):
         if not bundle:raise RuntimeUnavailable('历史执行没有固定角色清单，配置未知。')
         for operation in bundle:runtime_bindings.restore(bundle,operation)
     check('runtime_replay_available',runtimes)
+    def plan_revision():
+        saved=provenance.load_plan_revision(run['plan_snapshot_id'])
+        if saved['id']!=plan_id or saved['revision']!=run['revision'] or saved['plan']!=run['plan']:
+            raise RuntimeUnavailable('执行与固定计划修订不符。')
+        artifacts.append({'kind':'plan_revision','id':run['plan_snapshot_id'],'fingerprint':fingerprint(saved)})
+    if run.get('plan_snapshot_id'):check('plan_revision',plan_revision)
     review_ids=[p['review']['review_id'] for p in run['papers'] if p.get('review',{}).get('review_id')]
     def linked_reviews():
         if run.get('review_selection_id'):
@@ -108,6 +116,16 @@ def inspect_execution(plan_id,execution_id,selection):
     for key,identifier,action in [('coverage',selection.coverage_id,cover),('report',selection.report_id,report)]:
         if identifier:check(key,action)
         else:checks.append({'key':key,'status':'not_selected','detail':'未选择产物，未验证。'})
+    def report_check(identifier,kind):
+        from api import report_checks
+        if not selection.report_id:raise HTTPException(422)
+        value=report_checks.detail(selection.report_id,identifier)
+        if not value['source_unchanged'] or not value['complete'] or value['check_kind']!=kind:raise HTTPException(422)
+        report_checks.verify(coverage.read(value['request_id']))
+        artifacts.append({'kind':kind,'id':identifier,'fingerprint':fingerprint(value)})
+    for key,identifier,kind in [('report_independent_review',selection.report_review_id,'independent_review'),
+                                ('report_original_replay',selection.report_replay_id,'original_replay')]:
+        if identifier:check(key,lambda identifier=identifier,kind=kind:report_check(identifier,kind))
     payload={'plan_id':plan_id,'execution_id':execution_id,'plan_revision':run['revision'],
         'plan_fingerprint':fingerprint(run['plan']),'questions':run['plan']['research_questions'],
         'selection':selection.model_dump(),'execution_status':run['status'],'checks':checks,'artifacts':artifacts,
@@ -125,7 +143,7 @@ def inspect_route(plan_id:str,execution_id:str,body:Selection):
 @router.post('/agent/plans/{plan_id}/executions/{execution_id}/acceptance',status_code=201)
 def save(plan_id:str,execution_id:str,body:SaveAcceptance):
     try:
-        selection=Selection(coverage_id=body.coverage_id,report_id=body.report_id)
+        selection=Selection(**body.model_dump(include=set(Selection.model_fields)))
         inspected=inspect_execution(plan_id,execution_id,selection)
         if inspected['fingerprint']!=body.expected_fingerprint:raise HTTPException(409,detail='检查后材料或状态已变化，请刷新检查并重新核对，不保存过期声明。')
         record={'id':'acceptance_'+uuid4().hex,'kind':'execution_acceptance','created_at':tasks.now(),

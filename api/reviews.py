@@ -30,7 +30,8 @@ from review.loader import parse_analyses
 from review.citations import build_citation_index, snapshot_papers
 from review.matrix import render_matrix_csv
 from review.synthesis import (build_payload, render_review_md, synthesize_review, ReviewStructureError,
-                              ReviewDraft, ReviewValidationError, WRITING_PROFILE, review_output_tokens)
+                              ReviewDraft, ReviewValidationError, WRITING_PROFILE, review_output_tokens,
+                              prepare_review_request, invoke_review_request)
 from storage.database import make_db
 from storage.db_models import PaperDocumentRecord, PaperRecord
 
@@ -255,7 +256,10 @@ def run_review(task_id, snapshots, papers, topic, settings, research_context=Non
                 focus+='\n比较维度：'+ '、'.join(research_context['comparison_dimensions'])
                 focus+='\n阅读范围：'+json.dumps(research_context['reading_coverage'],ensure_ascii=False)
                 focus+='\n按以上研究问题和维度进行有证据的比较；无法比较或未阅读的部分须明确说明，不得补造数据或声称完整领域查新。'
-            draft, _ = synthesize_review(llm, papers, method=settings['method'], topic=focus)
+            request = prepare_review_request(papers, method=settings['method'], topic=focus)
+            # 调用前持久化，失败草稿也有可回放的实际输入。
+            update_task(task_id, synthesis_request=request)
+            draft, _ = invoke_review_request(llm, request)
         update_task(task_id, progress=85, stage='正在核验跨论文引用和原文版本')
         public_papers = [replace(paper, source_url=safe_source(paper.source_url), evidence_index={key: dict(value, source_url=safe_source(value['source_url'])) for key, value in paper.evidence_index.items()}) for paper in papers]
         payload = {'paper_ids': [p.paper_id for p in papers], 'analysis_ids': [s['id'] for s in snapshots],
@@ -263,6 +267,7 @@ def run_review(task_id, snapshots, papers, topic, settings, research_context=Non
                    'matrix': matrix_payload(snapshots, papers),
                    'evidence_index': {f'P{p.paper_id}:{key}': value for p in public_papers for key, value in p.evidence_index.items()},
                    'citation_index': build_citation_index(draft, public_papers)}
+        payload['synthesis_request'] = request
         if research_context:
             payload['research_context']=research_context
         payload.update(provenance.fields(tasks.get_task(task_id)))

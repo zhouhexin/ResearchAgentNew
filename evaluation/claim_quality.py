@@ -34,6 +34,12 @@ def read_jsonl(path):
 
 def atomic_json(path, value):
     path = Path(path)
+    # Windows 的失败归档含完整内容哈希，目标路径可能超过 MAX_PATH。
+    # 使用同一绝对目标的长路径形式，保留原目录、原文件名和历史协议。
+    if os.name == 'nt':
+        address = str(path.absolute())
+        if not address.startswith('\\\\?\\'):
+            path = Path('\\\\?\\UNC\\' + address[2:] if address.startswith('\\\\') else '\\\\?\\' + address)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix='.claim-', dir=path.parent)
     try:

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, model_serializer
 from agent.runtime_snapshot import fingerprint
 
 POLICY='task-quality-v1'
@@ -59,17 +59,34 @@ class Case(Strict):
     permission:Permission
     materials:list[Material]=Field(min_length=1,max_length=100)
     requirements:list[Requirement]=Field(min_length=1,max_length=30)
+    review_request:dict|None=None
+    source_feedback:dict|None=None
+
+    @model_serializer(mode='wrap')
+    def compatible_dump(self, handler):
+        value = handler(self)
+        for key in ('review_request', 'source_feedback'):
+            if value.get(key) is None:value.pop(key, None)
+        return value
 
     @model_validator(mode='after')
     def valid(self):
         for values in (self.materials,self.requirements):
             if len({v.id for v in values})!=len(values):raise ValueError('案例材料或要求编号重复。')
+        if self.review_request is not None:
+            from evaluation.report_protocol import check_case
+            check_case(self)
+        if self.source_feedback is not None:
+            from evaluation.report_protocol import check_feedback
+            check_feedback(self.source_feedback)
         return self
 
     @property
     def input_hash(self):
-        return fingerprint({k:getattr(self,k) for k in ('question','scope')}|{
-            'materials':[m.model_dump() for m in self.materials]})
+        value = {k:getattr(self,k) for k in ('question','scope')}|{
+            'materials':[m.model_dump() for m in self.materials]}
+        if self.review_request is not None:value['review_request']=self.review_request
+        return fingerprint(value)
 
 
 class Dataset(Strict):

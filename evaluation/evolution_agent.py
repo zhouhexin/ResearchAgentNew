@@ -100,7 +100,10 @@ def prepare(spec):
     if len(dataset.cases) > 20 or any(c.split != 'development' for c in dataset.cases):
         raise RuntimeUnavailable('自主演化只接受至多20条获准开发任务，不接受留出或回归材料。')
     parent = get(spec.baseline_binding_id, 'task_replay_binding')
-    _, runtime = restore(parent)
+    version, runtime = restore(parent)
+    from evaluation.report_protocol import check_binding
+    for case in dataset.cases:
+        check_binding(case, version)
     for key, role in ((spec.controller_binding_id, 'controller'), (spec.reviewer_binding_id, 'reviewer')):
         _, actual = restore_role(get(key, 'autonomous_role_binding'), role)
         if actual != runtime:
@@ -164,11 +167,11 @@ class EvolutionSession:
     def entries(self):
         return self.store.items(self.id)
 
-    def call(self, key, binding, role, system, body, schema):
+    def call(self, key, binding, role, system, body, schema, method='json_schema'):
         if len(json.dumps(body, ensure_ascii=False)) > self.spec.max_context_chars:
             raise RuntimeUnavailable('实际模型输入超出本轮字符预算，未截断或调用。')
         digest = fingerprint({'system': system, 'body': {k:v for k,v in body.items() if k != 'budget'},
-                              'schema': schema.model_json_schema()})
+                              'schema': schema.model_json_schema(), 'method': method})
         item_id = 'call:' + key
         old = self.entries().get(item_id)
         if old:
@@ -200,7 +203,7 @@ class EvolutionSession:
             provenance.transaction(lambda session: save_immutable(session, actual))
             self.store.check_deadline(self.id, self.token)
             with analysis_llm(runtime_snapshot=actual) as model:
-                structured = model.with_structured_output(schema, method='json_schema', strict=True, include_raw=True)
+                structured = model.with_structured_output(schema, method=method, strict=True if method=='json_schema' else None, include_raw=True)
                 self.store.check_deadline(self.id, self.token)
                 self.store.mark_started(self.id, self.token, item_id, actual.id)
                 completed['invoke_started'] = True
@@ -258,8 +261,16 @@ class EvolutionSession:
             logical = 'executor:' + fingerprint([candidate_id, case.id])
             begin = time()
             try:
-                answer = self.call(logical, binding, 'executor', strategy_prompt(strategy), provided, response_schema(provided))
-                text, findings = materialize(answer.model_dump(), provided)
+                if case.review_request is not None:
+                    from evaluation.report_protocol import execution_request, materialize_case
+                    system, body, schema, method = execution_request(case, strategy)
+                    if len(json.dumps(body, ensure_ascii=False)) > strategy.max_input_chars:
+                        raise ValueError('原综述输入超预算，未截断材料。')
+                    answer = self.call(logical, binding, 'executor', system, body, schema, method=method)
+                    text, findings = materialize_case(answer.model_dump(), case)
+                else:
+                    answer = self.call(logical, binding, 'executor', strategy_prompt(strategy), provided, response_schema(provided))
+                    text, findings = materialize(answer.model_dump(), provided)
                 outcome = Outcome(case_id=case.id, repetition=1, input_hash=case.input_hash,
                     status='succeeded', answer=text, findings=findings, human_judgments=[], calls=1)
             except (CallFailed, ValueError) as exc:
@@ -356,7 +367,8 @@ class EvolutionSession:
             view = payload(case, Strategy())
             if action.tool == 'read_case':
                 return {'case_id': case.id, 'question': case.question, 'scope': case.scope,
-                        'materials': [{'material_id':m['material_id'], 'page_number':m['page_number']} for m in view['materials']]}
+                        'materials': [{'material_id':m['material_id'], 'page_number':m['page_number']} for m in view['materials']],
+                        'execution_protocol': 'review-synthesis-v1' if case.review_request else 'task-replay-pointers-v1'}
             material = next((m for m in view['materials'] if m['material_id'] == action.material_id), None)
             if material is None:
                 raise ValueError('材料不属于对应案例。')
@@ -374,6 +386,7 @@ class EvolutionSession:
                     'supported_and_answered':probe['auxiliary_answered_and_supported'],
                     'denominator':probe['auxiliary_denominator']},
                 'case_status_index':[{'case_id':o['case_id'],'status':o['status'],'error_code':o['error_code'],
+                    'recorded_source_problem_count':len((next(c.source_feedback for c in self.dataset.cases if c.id==o['case_id']) or {}).get('issues',[])),
                     'review_status':r['status'],'review_error_code':r.get('error_code'),
                     'auxiliary_source_support':r.get('source_support'),
                     'auxiliary_answer_completeness':r.get('answer_completeness')}
@@ -382,7 +395,8 @@ class EvolutionSession:
                     'mode':'single_case' if action.case_id else 'summary',
                     'next_action':'需要详情时使用read_feedback并指定case_id；重复读取总览不会展开更多内容。'},
                 'cases': [{'case_id':o['case_id'], 'status':o['status'], 'error_code':o['error_code'],
-                    'answer':o['answer'], 'findings':o['findings'], 'auxiliary_review':r}
+                    'answer':o['answer'], 'findings':o['findings'], 'auxiliary_review':r,
+                    'recorded_source_problem':next(c.source_feedback for c in self.dataset.cases if c.id==o['case_id'])}
                     for o,r in zip(probe['run']['outcomes'], probe['auxiliary_reviews'])
                     if o['case_id']==action.case_id],
                 'human_gold': 'not_provided'}

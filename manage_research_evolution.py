@@ -14,10 +14,29 @@ def main(argv=None):
     a=sub.add_parser('prepare-experiment');a.add_argument('file',type=Path)
     a=sub.add_parser('compare');a.add_argument('experiment_id');a.add_argument('baseline_result');a.add_argument('candidate_result')
     a=sub.add_parser('execute');a.add_argument('experiment_id');a.add_argument('--checkpoints',type=Path,default=Path('outputs/experiments/evolution.sqlite3'));a.add_argument('--confirm-model-calls',action='store_true')
+    a=sub.add_parser('report-experiment');a.add_argument('handoff_id')
+    a.add_argument('--checkpoints',type=Path,default=Path('outputs/experiments/report_evolution.sqlite3'))
+    a.add_argument('--max-calls',type=int,default=24);a.add_argument('--max-steps',type=int,default=8)
+    a.add_argument('--total-seconds',type=int,default=1200);a.add_argument('--confirm-model-calls',action='store_true')
     args=p.parse_args(argv)
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent/'.env')
-    if args.command=='candidate':result=register_candidate(Candidate.model_validate(json.loads(args.file.read_text())))
+    if args.command=='report-experiment':
+        from evaluation import evolution_agent
+        from api import report_checks
+        from agent.runtime_snapshot import fingerprint,RuntimeUnavailable
+        record=get(args.handoff_id,'report_evolution_handoff')
+        if not record['permission']['allowed'] or fingerprint(report_checks.source(record['report_id']))!=record['report_sha256']:
+            raise RuntimeUnavailable('交接授权或冻结报告已变化。')
+        parent=get(record['baseline_binding_id'],'task_replay_binding')
+        control=evolution_agent.register_role(parent,'controller');reviewer=evolution_agent.register_role(parent,'reviewer')
+        policy=put('gate_policy',GatePolicy(revision='report-development-v1',author='fixed-program-policy',frozen_before_experiment=True).model_dump())
+        spec=evolution_agent.AutonomousSpec(dataset_artifact_id=record['dataset_artifact_id'],
+            baseline_binding_id=record['baseline_binding_id'],controller_binding_id=control,reviewer_binding_id=reviewer,
+            policy_id=policy,max_calls=args.max_calls,max_steps=args.max_steps,total_seconds=args.total_seconds)
+        job=evolution_agent.prepare(spec)
+        result=evolution_agent.execute(job,args.checkpoints) if args.confirm_model_calls else job
+    elif args.command=='candidate':result=register_candidate(Candidate.model_validate(json.loads(args.file.read_text())))
     elif args.command=='freeze-policy':result=put('gate_policy',GatePolicy.model_validate(json.loads(args.file.read_text())).model_dump())
     elif args.command=='diagnose':result=failure_hypotheses(args.result_id)
     elif args.command=='compare':

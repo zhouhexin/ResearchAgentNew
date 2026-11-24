@@ -23,6 +23,21 @@ class Execution(BaseModel):
     confirm_model_calls:bool=False
 
 
+class ReportHandoff(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    result_ids:list[str]=Field(min_length=1,max_length=20)
+    permission:dict
+    requirements:list[dict]=Field(min_length=1,max_length=30)
+
+
+@router.post('/reports/{report_id}/handoff',status_code=201)
+def report_handoff(report_id:str,body:ReportHandoff):
+    try:
+        from evaluation.report_export import handoff
+        return handoff(report_id,body.result_ids,body.permission,body.requirements)
+    except (ValueError,RuntimeUnavailable) as exc:raise invalid(exc) from None
+
+
 def invalid(exc):
     if isinstance(exc,RuntimeUnavailable):return runtime_bindings.unavailable(exc)
     return HTTPException(422,detail={'code':'EVALUATION_INPUT_INVALID','message':'输入契约或材料不符合要求，请检查版本、授权与集合。'})

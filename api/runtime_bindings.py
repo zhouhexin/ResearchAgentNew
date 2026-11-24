@@ -15,7 +15,8 @@ from storage.database import make_db
 from storage.runtime_versions import load_immutable, save_immutable
 
 OPERATIONS = {'planning': 'research', 'search': 'research', 'analysis': 'analysis',
-              'claim_review': 'review', 'questions': 'research', 'review': 'analysis', 'coverage': 'review'}
+              'claim_review': 'review', 'questions': 'research', 'review': 'analysis', 'coverage': 'review',
+              'report_review': 'review'}
 
 
 def enabled():
@@ -28,6 +29,7 @@ def enabled():
 def contracts(operation):
     from agent import paper_analyzer, research_planner, research_search, claim_reference_verifier, question_coverage
     from review import questions, synthesis
+    from review import report_review
     from api.analysis_runtime import contracts as analysis_contracts
     if operation == 'analysis':
         return analysis_contracts()
@@ -39,6 +41,7 @@ def contracts(operation):
         'questions': (questions, questions.QUESTION_PROMPT, questions.QuestionSuggestions),
         'review': (synthesis, synthesis.SYSTEM, synthesis.ReviewDraft),
         'coverage': (question_coverage, question_coverage.PROMPT, question_coverage.CoverageDraft),
+        'report_review': (report_review, report_review.PROMPT, report_review.ReferenceClaimReview),
     }[operation]
     return {operation: {'prompt': prompt, 'schema': schema.model_json_schema(),
                         'message_builders': inspect.getsource(module)}}
@@ -66,6 +69,8 @@ def capture_bundle():
     settings['review']['output_tokens'] = review_output_tokens()
     settings['coverage'].update(output_tokens=_positive('COVERAGE_MAX_OUTPUT_TOKENS', 6000),
                                 max_input_chars=_positive('COVERAGE_MAX_INPUT_CHARS', 60000))
+    settings['report_review'].update(retries=0, output_tokens=_positive('REPORT_REVIEW_MAX_OUTPUT_TOKENS', 2000),
+                                    max_input_chars=_positive('REPORT_REVIEW_MAX_INPUT_CHARS', 60000))
     settings['analysis'].update(retries=0, batch_size=2, batch_max_chars=max_chars,
                                 batch_retries=batch_retries, scope='full')
     tool_config = capture_tools()
@@ -76,7 +81,8 @@ def capture_bundle():
         versions[operation] = base.model_copy(update={
             'role': role, 'contracts_json': canonical(contracts(operation)),
             'tools_json': canonical({'operation': operation, 'settings': settings[operation], 'search': tool_config}),
-            'quote_protocol': {'claim_review': 'references-v2', 'coverage': COVERAGE_POLICY}.get(operation, 'p0-' + operation + '-v1')})
+            'quote_protocol': {'claim_review': 'references-v2', 'report_review': 'report-references-v1',
+                               'coverage': COVERAGE_POLICY}.get(operation, 'p0-' + operation + '-v1')})
         runtimes[operation] = capture_runtime(read_timeout=settings[operation]['timeout'],
             retries=settings[operation]['retries'], max_output_tokens=settings[operation].get('output_tokens'))
     engine, Session = make_db(os.environ['DATABASE_URL'])

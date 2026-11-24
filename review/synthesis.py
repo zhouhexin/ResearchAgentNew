@@ -349,14 +349,8 @@ SYSTEM = """
 """
 
 
-def synthesize_review(
-    llm,
-    papers: list[ReviewPaper],
-    method: str = "json_schema",
-    topic: str = "",
-) -> tuple[ReviewDraft, set[str]]:
-    """通过 LLM 生成证据驱动的综述。"""
-
+def prepare_review_request(papers, method='json_schema', topic=''):
+    """冻结实际请求；回放不重新选材或读取默认写作配置。"""
     payload, allowed = build_detailed_payload(papers, topic)
     available_papers = {ref.split(":")[0] for ref in allowed}
     if len(available_papers) < 2:
@@ -365,6 +359,86 @@ def synthesize_review(
             "input_papers": [{"id": p.paper_id, "title": p.title} for p in papers],
         })
 
+    from agent.runtime_snapshot import fingerprint
+    content = {'protocol': 'review-synthesis-v1', 'prompt': SYSTEM,
+               'schema': ReviewDraft.model_json_schema(), 'method': method,
+               'payload': payload, 'allowed_refs': sorted(allowed), 'writing_profile': WRITING_PROFILE}
+    return dict(content, sha256=fingerprint(content))
+
+
+class _FrozenInput(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+
+class _InputEvidence(_FrozenInput):
+    ref: str = Field(pattern=r'^P[1-9]\d*:E[1-9]\d*$')
+    quote: str = Field(min_length=1)
+    page_number: int | None = Field(ge=1)
+
+
+class _InputFinding(_FrozenInput):
+    statement: str = Field(min_length=1)
+    evidence: list[_InputEvidence] = Field(min_length=1)
+
+
+class _InputCoverage(_FrozenInput):
+    available: int = Field(ge=0)
+    provided: int = Field(ge=0)
+
+
+class _InputPaper(_FrozenInput):
+    paper_id: int = Field(ge=1)
+    title: str = Field(min_length=1)
+    doi: str | None
+    findings: dict[str, list[_InputFinding]]
+    material_coverage: dict[str, _InputCoverage]
+
+
+class _ReviewInput(_FrozenInput):
+    review_focus: str = Field(min_length=1)
+    coverage_note: str = Field(min_length=1)
+    papers: list[_InputPaper] = Field(min_length=2, max_length=5)
+
+
+def check_review_request(request):
+    from agent.runtime_snapshot import fingerprint, RuntimeUnavailable
+    if not isinstance(request, dict) or set(request) != {
+            'protocol', 'prompt', 'schema', 'method', 'payload', 'allowed_refs', 'writing_profile', 'sha256'}:
+        raise RuntimeUnavailable('原综述请求字段不完整或包含未知字段。')
+    content = {key: value for key, value in request.items() if key != 'sha256'}
+    if (request.get('sha256') != fingerprint(content) or request.get('protocol') != 'review-synthesis-v1'
+            or request.get('prompt') != SYSTEM or request.get('schema') != ReviewDraft.model_json_schema()
+            or request.get('writing_profile') != WRITING_PROFILE
+            or request.get('method') not in ('json_schema', 'function_calling', 'json_mode')):
+        raise RuntimeUnavailable('原综述请求、Prompt或Schema不可恢复，不使用当前协议替代。')
+    try:
+        provided = _ReviewInput.model_validate(request['payload'])
+        if len({p.paper_id for p in provided.papers}) != len(provided.papers):
+            raise ValueError('duplicate paper')
+        refs = set()
+        for paper in provided.papers:
+            if set(paper.findings) != set(CATEGORIES) or set(paper.material_coverage) != set(CATEGORIES):
+                raise ValueError('unknown categories')
+            for category, findings in paper.findings.items():
+                count = paper.material_coverage[category]
+                if count.provided != len(findings) or count.provided > count.available:
+                    raise ValueError('coverage mismatch')
+                for finding in findings:
+                    for evidence in finding.evidence:
+                        if not evidence.ref.startswith(f'P{paper.paper_id}:') or not evidence.quote.strip():
+                            raise ValueError('source ownership mismatch')
+                        refs.add(evidence.ref)
+    except (TypeError, ValueError):
+        raise RuntimeUnavailable('原综述输入结构、材料归属或范围无效。') from None
+    if sorted(refs) != request['allowed_refs'] or len({ref.split(':')[0] for ref in refs}) < 2:
+        raise RuntimeUnavailable('综述请求的引用范围不匹配。')
+
+
+def invoke_review_request(llm, request):
+    check_review_request(request)
+    method, payload, allowed = request['method'], request['payload'], set(request['allowed_refs'])
+    topic = payload['review_focus']
+    available_papers = {ref.split(':')[0] for ref in allowed}
     structured = llm.with_structured_output(
         ReviewDraft,
         method=method,
@@ -373,7 +447,7 @@ def synthesize_review(
     )
 
     draft = structured.invoke([
-        ("system", SYSTEM),
+        ("system", request['prompt']),
         (
             "human",
             json.dumps(
@@ -396,7 +470,7 @@ def synthesize_review(
             "status": "failed_validation", "topic": topic,
             "validation_reason": ('comparison_claim_requires_multiple_papers' if comparison_failure else 'citation_contract_failed'),
             **location,
-            "input_papers": [{"id": p.paper_id, "title": p.title} for p in papers],
+            "input_papers": [{"id": p['paper_id'], "title": p['title']} for p in payload['papers']],
             "available_papers": sorted(available_papers),
             "used_papers": sorted({ref.split(":")[0] for ref in used if ref in allowed}),
             "invalid_refs": sorted(used - allowed),
@@ -404,6 +478,11 @@ def synthesize_review(
         }) from None
 
     return draft, allowed
+
+
+def synthesize_review(llm, papers: list[ReviewPaper], method='json_schema', topic=''):
+    """CLI与网页共用实际请求及原引用规则。"""
+    return invoke_review_request(llm, prepare_review_request(papers, method, topic))
 
 
 def render_review_md(

@@ -23,6 +23,7 @@
     "test:supplement-readings": "node scripts/supplement-readings-check.mjs",
     "test:execution-review-links": "node scripts/execution-review-links-check.mjs",
     "test:execution-acceptance": "node scripts/execution-acceptance-check.mjs",
+    "test:report-checks": "node scripts/report-checks-check.mjs",
     "test:evaluation-workspace": "node scripts/evaluation-workspace-check.mjs"
   },
   "dependencies": {

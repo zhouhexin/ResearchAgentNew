@@ -1,5 +1,7 @@
 # 测试说明：怎样知道程序是否正常
 
+综述独立审查、原协议回放、真实问题交给 Evolution 及计划到报告关联验收见 [本轮说明](REPORT_REVIEW_REPLAY.md)。相关隔离用例：`python -X utf8 -m pytest -q -p test.audit_isolation test/test_report_checks.py`。真实联调和人工语义复核分别验收。
+
 说明文字更新：2026-11-24。本轮全量与修复后相关回归结果见 [服务检查记录](SERVICE_AUDIT_2026-11-24.md)。
 
 测试就是让程序自动做一些检查，例如“重复导入是否增加了重复数据”“不存在的引用会不会被误当成真的”。
