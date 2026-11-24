@@ -192,6 +192,14 @@ def test_wrong_quotes_are_still_rejected(cli, monkeypatch):
         check_structured_analysis(CodexModel(timeout=10), 'json_schema')
 
 
+def test_bridge_allows_host_json_actions_without_enabling_codex_native_tools(cli):
+    CodexModel(timeout=10).invoke([('system','请选择宿主工具并输出tool字段。'),('human','读取反馈。')])
+    record=json.loads(cli.read_text())
+    assert 'JSON动作请求' in record['prompt'] and '不是调用Codex原生工具' in record['prompt']
+    assert 'features.shell_tool=false' in record['args'] and 'features.multi_agent=false' in record['args']
+    assert record['args'][record['args'].index('--sandbox')+1]=='read-only'
+
+
 def test_invalid_json_is_structural_failure(cli, monkeypatch):
     from agent.paper_analyzer import StructuredAnalysisError
     monkeypatch.setenv('FAKE_CODEX_MODE', 'bad_json')

@@ -1,0 +1,2 @@
+export interface Inspection {fingerprint:string;execution_status:string;checks:{key:string;status:'passed'|'failed'|'not_selected';detail:string}[];artifacts:{kind:string;id:string;fingerprint:string;paper_id?:number;scope?:string;selected_chunks?:number;total_chunks?:number}[];missing_review_analysis_ids:string[];limits:string[]}
+export interface Acceptance {id:string;created_at:string;reviewer:string;inputs_unchanged:boolean;inspection:Inspection;manual:{key:string;verdict:string;reason:string}[]}

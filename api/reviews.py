@@ -297,6 +297,11 @@ def run_review(task_id, snapshots, papers, topic, settings, research_context=Non
             code, message = 'MODEL_HTTP_ERROR', f'模型服务返回 HTTP {exc.status_code}，请检查权限、额度及模型配置。'
         elif isinstance(exc, ReviewValidationError):
             code, message = 'REVIEW_VALIDATION_FAILED', '综述未通过引用核验，未发布报告。每条结论必须有合法引用，整份报告必须实际引用至少两篇论文。'
+            diagnostic = {'reason':exc.diagnostics.get('validation_reason', 'citation_contract_failed'),
+                          'phase':'review_validation'}
+            if diagnostic['reason'] == 'comparison_claim_requires_multiple_papers':
+                message = '跨论文比较的主题句须引用至少两篇论文；仅在解释段落引用不满足当前规则。未发布报告，请核对比较结构。'
+                diagnostic.update(section='comparisons', point_index=exc.diagnostics['point_index'])
         elif isinstance(exc, ReviewStructureError):
             code, message = 'REVIEW_STRUCTURE_FAILED', '模型未返回完整有效的结构化综述，未发布报告。'
         elif isinstance(exc, ReviewInputsChanged):
@@ -310,7 +315,7 @@ def run_review(task_id, snapshots, papers, topic, settings, research_context=Non
         if diagnostic is not None or isinstance(exc, (ReviewValidationError, ReviewStructureError)):
             try:
                 ERROR_DIR.mkdir(parents=True, exist_ok=True)
-                (ERROR_DIR / f'{task_id}.json').write_text(json.dumps(diagnostic if diagnostic is not None else exc.diagnostics, ensure_ascii=False, indent=2), encoding='utf-8')
+                (ERROR_DIR / f'{task_id}.json').write_text(json.dumps(exc.diagnostics if isinstance(exc, (ReviewValidationError, ReviewStructureError)) else diagnostic, ensure_ascii=False, indent=2), encoding='utf-8')
             except OSError:
                 logger.warning('无法保存综述诊断：task=%s', task_id)
         logger.warning('多篇综述失败：task=%s error_type=%s code=%s diagnostic=%s', task_id, type(exc).__name__, code, diagnostic)

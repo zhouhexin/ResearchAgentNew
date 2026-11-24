@@ -7,6 +7,7 @@ export const router=createRouter({history:createWebHistory(),scrollBehavior:()=>
 {path:'/agent',component:()=>import('../views/AgentView.vue'),meta:{title:'科研 Agent',eyebrow:'RESEARCH ASSISTANT'}},
 {path:'/analysis',component:()=>import('../views/AnalysisView.vue'),meta:{title:'论文分析',eyebrow:'PAPER ANALYSIS'}},
 {path:'/reviews',component:()=>import('../views/ReviewView.vue'),meta:{title:'文献综述',eyebrow:'LITERATURE REVIEW'}},
+{path:'/evaluation',component:()=>import('../views/EvaluationView.vue'),meta:{title:'研究评测',eyebrow:'RESEARCH EVALUATION'}},
 {path:'/tasks',component:()=>import('../views/TaskCenterView.vue'),meta:{title:'任务中心',eyebrow:'ACTIVITY'}},
 {path:'/settings',component:()=>import('../views/SettingsView.vue'),meta:{title:'设置',eyebrow:'PREFERENCES'}},
 {path:'/:pathMatch(.*)*',component:()=>import('../views/NotFoundView.vue'),meta:{title:'页面未找到'}}]})

@@ -1,0 +1,117 @@
+{
+  "protocol": "task-run-v1",
+  "id": "synthetic-candidate",
+  "kind": "controlled_fixture",
+  "dataset_sha256": "8895eb81c90ac1d2c227b8aff2f3490c8a082679ff3a36e68869486e63de2ec9",
+  "split": "development",
+  "mode": "frozen",
+  "repetitions": 2,
+  "code_fingerprint": "6201e275c993fded1b6a1b7b64f106686c702d9fdff8af32b560aad5d781015c",
+  "runtime_snapshot_id": "fixture-only-no-real-runtime",
+  "prompt_schema_fingerprint": "a8a21a6632ef908b9f35300c3397b8e4fc937165ca26075de196f21888c6dd22",
+  "tool_config_fingerprint": "eaa59f9f4d7f18413ad0cf8872bb42bdf10f2609bdbf64486ec02beca52a5db0",
+  "outcomes": [
+    {
+      "case_id": "latency",
+      "repetition": 1,
+      "input_hash": "eb84d17df11f7bf29e3e880c04562db6fe229f56e0b013611fd60cdb2d95e322",
+      "status": "succeeded",
+      "answer": "合成演示回答，未调用模型。",
+      "findings": [
+        {
+          "statement": "在限定条件下观察到该结果。",
+          "citations": [
+            {
+              "material_id": "M1",
+              "quote": "invented quote",
+              "start_char": 0,
+              "end_char": 55
+            }
+          ]
+        }
+      ],
+      "human_judgments": [
+        {
+          "requirement_id": "R1",
+          "verdict": "unmet",
+          "assessor": "synthetic-fixture-author",
+          "reason": "合成示例标签，仅验证统计流程。",
+          "context": "independent"
+        }
+      ],
+      "error_code": null,
+      "seconds": 1.0,
+      "calls": 1,
+      "tokens": null,
+      "cost": null
+    },
+    {
+      "case_id": "scope",
+      "repetition": 1,
+      "input_hash": "4147ca9ecca5ccaea5fe6c37e6242e1b9179044e8efa127549582b30773a4362",
+      "status": "succeeded",
+      "answer": "合成演示回答，未调用模型。",
+      "findings": [
+        {
+          "statement": "在限定条件下观察到该结果。",
+          "citations": [
+            {
+              "material_id": "M1",
+              "quote": "Synthetic retrieval B was evaluated only on collection Y.",
+              "start_char": 0,
+              "end_char": 57
+            }
+          ]
+        }
+      ],
+      "human_judgments": [
+        {
+          "requirement_id": "R1",
+          "verdict": "met",
+          "assessor": "synthetic-fixture-author",
+          "reason": "合成示例标签，仅验证统计流程。",
+          "context": "independent"
+        }
+      ],
+      "error_code": null,
+      "seconds": 1.0,
+      "calls": 1,
+      "tokens": null,
+      "cost": null
+    },
+    {
+      "case_id": "latency",
+      "repetition": 2,
+      "input_hash": "eb84d17df11f7bf29e3e880c04562db6fe229f56e0b013611fd60cdb2d95e322",
+      "status": "succeeded",
+      "answer": "合成演示回答，未调用模型。",
+      "findings": [
+        {
+          "statement": "在限定条件下观察到该结果。",
+          "citations": [
+            {
+              "material_id": "M1",
+              "quote": "Synthetic method A has latency 12 ms under condition X.",
+              "start_char": 0,
+              "end_char": 55
+            }
+          ]
+        }
+      ],
+      "human_judgments": [
+        {
+          "requirement_id": "R1",
+          "verdict": "met",
+          "assessor": "synthetic-fixture-author",
+          "reason": "合成示例标签，仅验证统计流程。",
+          "context": "independent"
+        }
+      ],
+      "error_code": null,
+      "seconds": 1.0,
+      "calls": 1,
+      "tokens": null,
+      "cost": null
+    }
+  ]
+}

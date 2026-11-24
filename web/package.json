@@ -21,7 +21,9 @@
     "test:reread": "node scripts/reread-check.mjs",
     "test:supplement-search": "node scripts/supplement-search-check.mjs",
     "test:supplement-readings": "node scripts/supplement-readings-check.mjs",
-    "test:execution-review-links": "node scripts/execution-review-links-check.mjs"
+    "test:execution-review-links": "node scripts/execution-review-links-check.mjs",
+    "test:execution-acceptance": "node scripts/execution-acceptance-check.mjs",
+    "test:evaluation-workspace": "node scripts/evaluation-workspace-check.mjs"
   },
   "dependencies": {
     "vue": "3.5.32",

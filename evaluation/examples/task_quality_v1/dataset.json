@@ -1,0 +1,148 @@
+{
+  "protocol": "task-dataset-v1",
+  "id": "synthetic-task-demo",
+  "revision": "1",
+  "annotation_version": "fixture-only-v1",
+  "cases": [
+    {
+      "id": "latency",
+      "revision": "1",
+      "group_id": "group-latency",
+      "split": "development",
+      "kind": "synthetic",
+      "topic": "机器人视觉",
+      "task_type": "evidence_answer",
+      "question": "请依据给定材料说明该方法的结论及适用范围。",
+      "scope": "只依据这一段合成原文，不推断未提供条件。",
+      "permission": {
+        "allowed": true,
+        "basis": "开发合成示例，无真实论文或业务材料。",
+        "granted_by": "synthetic-fixture-author",
+        "granted_at": "2026-11-19"
+      },
+      "materials": [
+        {
+          "id": "M1",
+          "paper_key": "synthetic-latency",
+          "document_sha256": "c21fe88fe2587af5bcbb0994d525cc9f0bbe4e93748f4fe0cbce74cd4ca6bde3",
+          "text": "Synthetic method A has latency 12 ms under condition X.",
+          "text_sha256": "b59575feeeb0b4c1f3b4f7e3d3e1b417f269b1e5f0a4c26e753fb2210dc1878e",
+          "page_number": 1
+        }
+      ],
+      "requirements": [
+        {
+          "id": "R1",
+          "description": "回答保留原文中的条件，不外推到所有场景。",
+          "author": "synthetic-fixture-author",
+          "rationale": "演示任务回答程度判定，不是独立真实质量验证。"
+        }
+      ]
+    },
+    {
+      "id": "scope",
+      "revision": "1",
+      "group_id": "group-scope",
+      "split": "development",
+      "kind": "synthetic",
+      "topic": "检索代理",
+      "task_type": "evidence_answer",
+      "question": "请依据给定材料说明该方法的结论及适用范围。",
+      "scope": "只依据这一段合成原文，不推断未提供条件。",
+      "permission": {
+        "allowed": true,
+        "basis": "开发合成示例，无真实论文或业务材料。",
+        "granted_by": "synthetic-fixture-author",
+        "granted_at": "2026-11-19"
+      },
+      "materials": [
+        {
+          "id": "M1",
+          "paper_key": "synthetic-scope",
+          "document_sha256": "852a9eaaf08b288f09f2abbba745afb5f0e4a3893bbca50012e8849c6e88535f",
+          "text": "Synthetic retrieval B was evaluated only on collection Y.",
+          "text_sha256": "625fe4224badc55b5e8877c76a82b1cf781beb96845e94291165a7005517f04a",
+          "page_number": 1
+        }
+      ],
+      "requirements": [
+        {
+          "id": "R1",
+          "description": "回答保留原文中的条件，不外推到所有场景。",
+          "author": "synthetic-fixture-author",
+          "rationale": "演示任务回答程度判定，不是独立真实质量验证。"
+        }
+      ]
+    },
+    {
+      "id": "regression",
+      "revision": "1",
+      "group_id": "group-regression",
+      "split": "regression",
+      "kind": "synthetic",
+      "topic": "机器人视觉",
+      "task_type": "evidence_answer",
+      "question": "请依据给定材料说明该方法的结论及适用范围。",
+      "scope": "只依据这一段合成原文，不推断未提供条件。",
+      "permission": {
+        "allowed": true,
+        "basis": "开发合成示例，无真实论文或业务材料。",
+        "granted_by": "synthetic-fixture-author",
+        "granted_at": "2026-11-19"
+      },
+      "materials": [
+        {
+          "id": "M1",
+          "paper_key": "synthetic-regression",
+          "document_sha256": "4453e1f5e1abf4f570b24d3fe92dc747b9ff5194279817f1d4d7dc0ad4a952bc",
+          "text": "Synthetic method C requires calibration Z.",
+          "text_sha256": "73473d714fede2bb259ba4bde35afc13dea2503ac39b947ed93723002261d7eb",
+          "page_number": 1
+        }
+      ],
+      "requirements": [
+        {
+          "id": "R1",
+          "description": "回答保留原文中的条件，不外推到所有场景。",
+          "author": "synthetic-fixture-author",
+          "rationale": "演示任务回答程度判定，不是独立真实质量验证。"
+        }
+      ]
+    },
+    {
+      "id": "reserved",
+      "revision": "1",
+      "group_id": "group-reserved",
+      "split": "holdout",
+      "kind": "synthetic",
+      "topic": "检索代理",
+      "task_type": "evidence_answer",
+      "question": "请依据给定材料说明该方法的结论及适用范围。",
+      "scope": "只依据这一段合成原文，不推断未提供条件。",
+      "permission": {
+        "allowed": true,
+        "basis": "开发合成示例，无真实论文或业务材料。",
+        "granted_by": "synthetic-fixture-author",
+        "granted_at": "2026-11-19"
+      },
+      "materials": [
+        {
+          "id": "M1",
+          "paper_key": "synthetic-reserved",
+          "document_sha256": "694b69dcf1cd0d608911b94e2bd4b46710cece34fa85d5bdf3c771691c640f4f",
+          "text": "Synthetic reserved material D contains no claimed comparison.",
+          "text_sha256": "66159098f60c40a7c2fb28242fea3f2e24b3d7d82e0b27700670c2cd530d533c",
+          "page_number": 1
+        }
+      ],
+      "requirements": [
+        {
+          "id": "R1",
+          "description": "回答保留原文中的条件，不外推到所有场景。",
+          "author": "synthetic-fixture-author",
+          "rationale": "演示任务回答程度判定，不是独立真实质量验证。"
+        }
+      ]
+    }
+  ]
+}

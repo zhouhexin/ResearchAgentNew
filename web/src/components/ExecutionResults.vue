@@ -5,6 +5,7 @@ import ReadingCoverage from './ReadingCoverage.vue'
 import PlanReportWorkspace from './PlanReportWorkspace.vue'
 import QuestionCoverageWorkspace from './QuestionCoverageWorkspace.vue'
 import ExecutionReviewLinks from './ExecutionReviewLinks.vue'
+import ExecutionAcceptance from './ExecutionAcceptance.vue'
 defineProps<{run:ResearchExecution}>()
 defineEmits<{'execution-selected':[executionId:string]}>()
 const names={pending:'待执行',queued:'排队中',running:'进行中',succeeded:'已完成',failed:'失败',cancelled:'已取消'}
@@ -36,5 +37,6 @@ const label=(s:ExecutionStep)=>names[s.status]+(s.status==='succeeded'&&s.reused
    <ExecutionReviewLinks v-if="run.papers.every(p=>p.analysis.status==='succeeded')" :execution="run" @rechecked="$emit('execution-selected',$event)"/>
    <PlanReportWorkspace v-if="run.status==='succeeded'" :key="run.id" :execution="run"/>
    <QuestionCoverageWorkspace v-if="run.papers.every(p=>p.analysis.status==='succeeded')" :key="'coverage-'+run.id" :execution="run" @execution-selected="$emit('execution-selected',$event)"/>
+   <ExecutionAcceptance :execution="run"/>
 </template>
 <style scoped>.execution-paper{border-top:1px solid #edf0f4;padding:12px 0}.execution-paper h4{font-size:14px}.execution-step{font-size:13px;line-height:1.7}.execution-step a{margin-left:12px}</style>

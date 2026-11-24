@@ -55,6 +55,9 @@ def model(monkeypatch):
             if state['mode'] == 'single_paper':
                 draft['comparisons'] = []
                 draft['background'] = [{'claim': '单篇发现', 'evidence_refs': refs[:1]}]
+            if state['mode'] == 'single_comparison_claim':
+                draft['comparisons'][0].update(evidence_refs=refs[:1], paragraphs=[
+                    {'text':'解释段落同时讨论两篇论文。','evidence_refs':refs}])
             if state['mode'] in {'detailed', 'bad_paragraph'}:
                 draft['comparisons'][0].update(heading='结合实验口径理解结果', paragraphs=[
                     {'text': '先解释研究中提供的方法和输入，再说明比较所依赖的条件。', 'evidence_refs': refs[:1]},
@@ -182,6 +185,19 @@ def test_invalid_review_never_published(client, model, mode, code):
     assert task['status'] == 'failed' and task['result_id'] is None
     assert task['error']['code'] == code
     assert (reviews.ERROR_DIR / f'{task["id"]}.json').exists()
+
+
+def test_comparison_claim_failure_has_actionable_diagnostic_without_publishing(client, model):
+    model['mode'] = 'single_comparison_claim'
+    task = generate(client)
+    assert task['status'] == 'failed' and task['result_id'] is None
+    assert task['error']['code'] == 'REVIEW_VALIDATION_FAILED'
+    assert '主题句' in task['error']['message']
+    assert task['error']['diagnostic'] == {'reason':'comparison_claim_requires_multiple_papers',
+        'phase':'review_validation','section':'comparisons','point_index':0}
+    saved = json.loads((reviews.ERROR_DIR / f'{task["id"]}.json').read_text())
+    assert saved['invalid_refs'] == [] and saved['used_papers'] == ['P1','P3']
+    assert saved['candidate_draft'] and saved['validation_reason'] == task['error']['diagnostic']['reason']
 
 
 def test_raw_json_model_response_supported(client, model):
