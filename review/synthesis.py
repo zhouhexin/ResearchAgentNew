@@ -389,8 +389,13 @@ def synthesize_review(
         validate_review(draft, allowed)
     except ValueError as exc:
         used = {ref for section in SECTIONS for point in getattr(draft, section) for ref in point_references(point)}
+        comparison_failure = str(exc) == '跨论文比较至少引用两篇不同论文'
+        location = ({'section':'comparisons', 'point_index':next(i for i,p in enumerate(draft.comparisons)
+                    if len({ref.split(':')[0] for ref in p.evidence_refs}) < 2)} if comparison_failure else {})
         raise ReviewValidationError(str(exc), {
             "status": "failed_validation", "topic": topic,
+            "validation_reason": ('comparison_claim_requires_multiple_papers' if comparison_failure else 'citation_contract_failed'),
+            **location,
             "input_papers": [{"id": p.paper_id, "title": p.title} for p in papers],
             "available_papers": sorted(available_papers),
             "used_papers": sorted({ref.split(":")[0] for ref in used if ref in allowed}),
